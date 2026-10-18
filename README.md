@@ -88,7 +88,10 @@ Findings from probing the live API that shaped the client:
   timeline shows a diff only when it changed, and always shows the final one.
 - The initial prompt is not an activity, so the timeline shows it as your first message.
 - `sendMessage` returns nothing; replies are matched by order (the first agent activity after
-  your message).
+  your message). The echo of your message shows up within a few seconds.
+- Messaging a completed session doesn't resume it: the API accepts the message, Jules never
+  replies, and about a minute later the session turns FAILED (with no `sessionFailed` activity).
+  So `send` refuses finished sessions unless you pass `--force`, and the TUI disables the composer.
 - The discovery document (`api/discovery-v1alpha.json`) exposes archive, unarchive and delete,
   which aren't in the public reference; this client supports them.
 

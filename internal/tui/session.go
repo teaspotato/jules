@@ -301,6 +301,10 @@ func (sm *sessionModel) updateKeys(m *model, k tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.showHelp = true
 	case "i", "m":
+		if api.IsTerminal(sm.s.State) {
+			m.flash("Jules doesn't resume finished sessions; press esc then n to start a new one", true)
+			return nil
+		}
 		sm.composing = true
 		return sm.composer.Focus()
 	case "a":
@@ -358,7 +362,11 @@ func (sm *sessionModel) view(m *model) string {
 	if sm.composing {
 		box = m.st.focus
 	}
-	composer := box.Width(m.width - 2).Render(sm.composer.View())
+	inner := sm.composer.View()
+	if api.IsTerminal(sm.s.State) {
+		inner = fit(t.Faint.Render("This session has "+render.StateLabel(sm.s.State)+". Jules can't continue it; start a new session with n from the list."), sm.composer.Height())
+	}
+	composer := box.Width(m.width - 2).Render(inner)
 
 	scroll := ""
 	if sm.vp.TotalLineCount() > sm.vp.Height {

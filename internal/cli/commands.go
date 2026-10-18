@@ -433,6 +433,7 @@ func newNewCmd(a *app) *cobra.Command {
 func newSendCmd(a *app) *cobra.Command {
 	var (
 		wait    bool
+		force   bool
 		timeout time.Duration
 	)
 	cmd := &cobra.Command{
@@ -441,7 +442,10 @@ func newSendCmd(a *app) *cobra.Command {
 		Long: `Send a message to a session. The message is read from stdin when omitted.
 
 The API returns nothing for a sent message; with --wait, jules polls until the
-agent responds (any new agent activity after your message) and prints it.`,
+agent responds (any new agent activity after your message) and prints it.
+
+Messaging a completed or failed session is refused unless --force: the API
+accepts the message, but Jules doesn't reply and the session turns FAILED.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -455,6 +459,10 @@ agent responds (any new agent activity after your message) and prints it.`,
 			s, err := a.resolveSession(ctx, args[0])
 			if err != nil {
 				return err
+			}
+			if api.IsTerminal(s.State) && !force {
+				return withCode(ExitUsage, fmt.Errorf("session %s is %s; Jules doesn't resume finished sessions "+
+					"(a message marks it FAILED without a reply). Start a new session, or pass --force", s.ID, render.StateLabel(s.State)))
 			}
 			c, _ := a.api()
 			var tl *api.Timeline
@@ -480,6 +488,11 @@ agent responds (any new agent activity after your message) and prints it.`,
 			}
 			reply, err := waitForReply(ctx, c, tl, timeout)
 			if err != nil {
+				if a.jsonOut {
+					for _, act := range reply {
+						a.printNDJSON(map[string]any{"activity": act})
+					}
+				}
 				return err
 			}
 			if a.jsonOut {
@@ -501,6 +514,7 @@ agent responds (any new agent activity after your message) and prints it.`,
 		},
 	}
 	cmd.Flags().BoolVarP(&wait, "wait", "w", false, "wait for the agent's response and print it")
+	cmd.Flags().BoolVar(&force, "force", false, "send even if the session has completed or failed")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long")
 	return cmd
 }
@@ -537,6 +551,11 @@ func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, timeout 
 			if act.Originator != "user" && act.UserMessaged == nil && act.PlanApproved == nil {
 				return got, nil
 			}
+		}
+		// A session can fail without any activity (seen when messaging a
+		// completed session), so watch its state too.
+		if s, err := c.GetSession(ctx, tl.SessionID); err == nil && s.State == api.StateFailed {
+			return got, withCode(ExitFailed, fmt.Errorf("session %s failed without replying", s.ID))
 		}
 	}
 }

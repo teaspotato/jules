@@ -117,3 +117,16 @@ func TestShowNDJSON(t *testing.T) {
 		t.Fatalf("ndjson = %s", out)
 	}
 }
+
+func TestSendRefusesFinishedSession(t *testing.T) {
+	sent := false
+	_, err := run(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ":sendMessage") {
+			sent = true
+		}
+		w.Write([]byte(`{"id":"5","name":"sessions/5","state":"COMPLETED"}`))
+	}, "send", "5", "hello")
+	if err == nil || sent || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("err=%v sent=%v", err, sent)
+	}
+}
