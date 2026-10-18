@@ -625,6 +625,75 @@ func newApproveCmd(a *app) *cobra.Command {
 
 // ---- wait ------------------------------------------------------------------
 
+func newWatchCmd(a *app) *cobra.Command {
+	var interval time.Duration
+	var noBell bool
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Report sessions that go from working to blocked",
+		Long: `Poll the session list and print each session that moves from working
+(queued, planning, in progress) to blocked (needs plan approval or input,
+paused, failed). On a terminal it also rings the bell. Runs until
+interrupted; with --json it prints one session per line.`,
+		Example: `  jules watch
+  jules watch --json | while read -r s; do notify-send "Jules" "$(jq -r .title <<<"$s")"; done`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			c, err := a.api()
+			if err != nil {
+				return err
+			}
+			var groups map[string]string
+			delay := time.Duration(0)
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(delay):
+				}
+				ss, err := c.ListSessions(ctx, false)
+				if err != nil {
+					if api.IsAuth(err) || ctx.Err() != nil {
+						return err
+					}
+					fmt.Fprintln(a.errOut, "jules: "+err.Error())
+					delay = min(max(delay*2, interval), 5*time.Minute)
+					continue
+				}
+				delay = interval
+				if groups != nil {
+					for _, s := range api.BecameBlocked(groups, ss) {
+						if err := a.reportBlocked(s, !noBell); err != nil {
+							return err
+						}
+					}
+				}
+				groups = map[string]string{}
+				for _, s := range ss {
+					groups[s.ID] = api.Group(s)
+				}
+			}
+		},
+	}
+	cmd.Flags().DurationVarP(&interval, "interval", "i", 30*time.Second, "how often to poll")
+	cmd.Flags().BoolVar(&noBell, "no-bell", false, "don't ring the terminal bell")
+	return cmd
+}
+
+func (a *app) reportBlocked(s api.Session, ring bool) error {
+	if a.jsonOut {
+		return a.printNDJSON(s)
+	}
+	t := a.theme()
+	line := fmt.Sprintf("%s  %s  %s  %s  %s", time.Now().Format("15:04"), t.StateBadge(s.State), s.ID, s.Repo(), s.DisplayTitle())
+	if ring && a.tty() {
+		line = "\a" + line
+	}
+	_, err := fmt.Fprintln(a.out, line)
+	return err
+}
+
 func newWaitCmd(a *app) *cobra.Command {
 	var (
 		until    string

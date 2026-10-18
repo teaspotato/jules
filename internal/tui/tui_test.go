@@ -147,3 +147,21 @@ func TestEditsExpire(t *testing.T) {
 		t.Fatalf("job = %+v", j)
 	}
 }
+
+func TestWatchRingsOnBlocked(t *testing.T) {
+	m := &model{busy: map[string]int{}}
+	working := []api.Session{{ID: "a", State: api.StateInProgress, Title: "Fix it"}}
+	if m.watch(working) != nil {
+		t.Fatal("rang before the first live fetch")
+	}
+	m.groups = map[string]string{}
+	if m.watch(working) != nil {
+		t.Fatal("rang on first sight")
+	}
+	if m.watch([]api.Session{{ID: "a", State: api.StateAwaitingPlanApproval, Title: "Fix it"}}) == nil {
+		t.Fatal("no bell when a working session became blocked")
+	}
+	if !strings.Contains(m.toast, "Fix it") {
+		t.Fatalf("toast = %q", m.toast)
+	}
+}

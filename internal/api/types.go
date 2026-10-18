@@ -350,3 +350,38 @@ func LatestPlan(acts []Activity) (*Plan, bool) {
 	}
 	return plan, approved[plan.ID]
 }
+
+// Session groups, as the list's tabs show them.
+const (
+	GroupWorking  = "working"
+	GroupBlocked  = "blocked"
+	GroupDone     = "done"
+	GroupArchived = "archived"
+)
+
+// Group places a session in exactly one group. Unknown or new states count
+// as working.
+func Group(s Session) string {
+	if s.Archived {
+		return GroupArchived
+	}
+	switch s.State {
+	case StateAwaitingPlanApproval, StateAwaitingUserFeedback, StatePaused, StateFailed:
+		return GroupBlocked
+	case StateCompleted:
+		return GroupDone
+	}
+	return GroupWorking
+}
+
+// BecameBlocked returns the sessions in cur that were working in prev
+// (by ID) and are blocked now.
+func BecameBlocked(prev map[string]string, cur []Session) []Session {
+	var out []Session
+	for _, s := range cur {
+		if prev[s.ID] == GroupWorking && Group(s) == GroupBlocked {
+			out = append(out, s)
+		}
+	}
+	return out
+}

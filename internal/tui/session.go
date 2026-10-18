@@ -204,9 +204,11 @@ func (m *model) updateSession(msg tea.Msg) tea.Cmd {
 		first := len(sm.tl.Activities) == 0
 		fresh := sm.tl.Merge(msg.acts)
 		hdrBefore := sm.headerHeight(m)
+		var ring tea.Cmd
 		if msg.session != nil {
 			sm.s = *msg.session
 			m.list.upsert(*msg.session)
+			ring = m.watch([]api.Session{*msg.session})
 		}
 		if len(fresh) > 0 {
 			m.cache.PutActivities(sm.s.ID, sm.tl.Activities)
@@ -216,7 +218,7 @@ func (m *model) updateSession(msg tea.Msg) tea.Cmd {
 			sm.resize(m, sm.width, sm.height)
 		}
 		sm.refresh(m, atBottom || first)
-		return sm.poll(m, sm.interval())
+		return tea.Batch(ring, sm.poll(m, sm.interval()))
 
 	case toggleDiffsMsg:
 		if msg.id != sm.s.ID {

@@ -72,6 +72,11 @@ type model struct {
 	busy map[string]int
 	spin spinner.Model
 
+	// groups remembers each session's group from live data so a session
+	// moving from working to blocked can ring the bell. Nil until the
+	// first successful list fetch.
+	groups map[string]string
+
 	toast      string
 	toastBad   bool
 	toastUntil time.Time
@@ -365,7 +370,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cache.PutSessions(msg.sessions)
 		}
 		m.list.gen++
-		return m, tickAfter(m.list.backoff, listTickMsg{m.list.gen})
+		tick := tickAfter(m.list.backoff, listTickMsg{m.list.gen})
+		if msg.err != nil {
+			return m, tick
+		}
+		if m.groups == nil {
+			m.groups = map[string]string{}
+		}
+		return m, tea.Batch(tick, m.watch(msg.sessions))
 
 	case listTickMsg:
 		if msg.gen != m.list.gen {
@@ -424,6 +436,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, m.updateList(msg)
 	}
+}
+
+// watch records the sessions' groups and, for any that went from working to
+// blocked since last seen, rings the bell and says which.
+func (m *model) watch(ss []api.Session) tea.Cmd {
+	if m.groups == nil {
+		return nil
+	}
+	hit := api.BecameBlocked(m.groups, ss)
+	for _, s := range ss {
+		m.groups[s.ID] = api.Group(s)
+	}
+	switch len(hit) {
+	case 0:
+		return nil
+	case 1:
+		m.flash("Needs you: "+hit[0].DisplayTitle()+" ("+render.StateLabel(hit[0].State)+")", false)
+	default:
+		m.flash(fmt.Sprintf("%d sessions need you", len(hit)), false)
+	}
+	m.toastUntil = time.Now().Add(10 * time.Second)
+	return bell
+}
+
+// bell rings the terminal bell. One small write, so it can't split the
+// renderer's escape sequences.
+func bell() tea.Msg {
+	os.Stdout.Write([]byte("\a"))
+	return nil
 }
 
 func (m *model) openSession(s api.Session) tea.Cmd {
