@@ -17,7 +17,8 @@ func TestSessionID(t *testing.T) {
 		"123":                                  "123",
 		"sessions/123":                         "123",
 		"https://jules.google.com/session/123": "123",
-		"https://jules.google.com/session/123/?x": "123",
+		"https://jules.google.com/session/123/?x":  "123",
+		"https://jules.google.com/session/123#top": "123",
 	}
 	for in, want := range cases {
 		if got := sessionID(in); got != want {
@@ -128,5 +129,38 @@ func TestSendRefusesFinishedSession(t *testing.T) {
 	}, "send", "5", "hello")
 	if err == nil || sent || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("err=%v sent=%v", err, sent)
+	}
+}
+
+func TestWaitForReplySkipsInFlightProgress(t *testing.T) {
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sessions/5":
+			w.Write([]byte(`{"id":"5","name":"sessions/5","state":"IN_PROGRESS"}`))
+		case "/sessions/5/activities":
+			polls++
+			if polls == 1 {
+				// In-flight progress update before userMessaged is recorded.
+				w.Write([]byte(`{"activities":[{"id":"p1","progressUpdated":{"title":"running tests"}}]}`))
+				return
+			}
+			w.Write([]byte(`{"activities":[
+				{"id":"p1","progressUpdated":{"title":"running tests"}},
+				{"id":"u1","originator":"user","userMessaged":{"userMessage":"hi"}},
+				{"id":"a1","originator":"agent","agentMessaged":{"agentMessage":"done"}}
+			]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := api.New("k")
+	c.BaseURL = srv.URL
+	tl := api.NewTimeline("5", nil)
+	got, err := waitForReply(t.Context(), c, tl, 10*1e9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if polls < 2 || len(got) != 3 || got[len(got)-1].ID != "a1" {
+		t.Fatalf("polls=%d got=%+v", polls, got)
 	}
 }

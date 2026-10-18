@@ -527,6 +527,7 @@ func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, timeout 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var got []api.Activity
+	sawEcho := false
 	delay := 2 * time.Second
 	for {
 		select {
@@ -548,14 +549,38 @@ func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, timeout 
 		delay = min(delay+time.Second, 5*time.Second)
 		for _, act := range fresh {
 			got = append(got, act)
-			if act.Originator != "user" && act.UserMessaged == nil && act.PlanApproved == nil {
-				return got, nil
+			if act.UserMessaged != nil || act.Originator == "user" {
+				sawEcho = true
+				continue
 			}
+			if act.PlanApproved != nil {
+				continue
+			}
+			// Ignore in-flight progress updates until our message echo is
+			// recorded, so an active session doesn't return before seeing it.
+			if act.ProgressUpdated != nil && !sawEcho {
+				continue
+			}
+			if act.SessionFailed != nil {
+				reason := act.SessionFailed.Reason
+				if reason == "" {
+					reason = fmt.Sprintf("session %s failed", tl.SessionID)
+				}
+				return got, withCode(ExitFailed, errors.New(reason))
+			}
+			return got, nil
 		}
-		// A session can fail without any activity (seen when messaging a
-		// completed session), so watch its state too.
-		if s, err := c.GetSession(ctx, tl.SessionID); err == nil && s.State == api.StateFailed {
-			return got, withCode(ExitFailed, fmt.Errorf("session %s failed without replying", s.ID))
+		// A session can reach a terminal or paused state without emitting a
+		// reply activity, so watch its state too.
+		if s, err := c.GetSession(ctx, tl.SessionID); err == nil {
+			switch s.State {
+			case api.StateFailed:
+				return got, withCode(ExitFailed, fmt.Errorf("session %s failed without replying", s.ID))
+			case api.StateCompleted:
+				return got, nil
+			case api.StatePaused:
+				return got, fmt.Errorf("session %s is paused", s.ID)
+			}
 		}
 	}
 }
@@ -780,17 +805,21 @@ func newDeleteCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var in *bufio.Reader
+			if !yes {
+				if !term.IsTerminal(int(os.Stdin.Fd())) {
+					return withCode(ExitUsage, errors.New("refusing to delete without --yes when stdin is not a terminal"))
+				}
+				in = bufio.NewReader(os.Stdin)
+			}
 			for _, arg := range args {
 				s, err := a.resolveSession(cmd.Context(), arg)
 				if err != nil {
 					return err
 				}
 				if !yes {
-					if !term.IsTerminal(int(os.Stdin.Fd())) {
-						return withCode(ExitUsage, errors.New("refusing to delete without --yes when stdin is not a terminal"))
-					}
 					fmt.Fprintf(a.errOut, "Delete %s (%s)? This cannot be undone. [y/N] ", s.ID, s.DisplayTitle())
-					line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+					line, _ := in.ReadString('\n')
 					if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
 						fmt.Fprintln(a.errOut, "skipped")
 						continue

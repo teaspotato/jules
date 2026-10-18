@@ -210,20 +210,23 @@ func TestNames(t *testing.T) {
 	cases := map[string]string{
 		"abc":          "sessions/abc",
 		"sessions/abc": "sessions/abc",
+		"abc#frag":     "sessions/abc%23frag",
+		"abc?q=1":      "sessions/abc%3Fq=1",
 	}
 	for in, want := range cases {
 		if got := SessionName(in); got != want {
-			t.Errorf("SessionName(%q) = %q", in, got)
+			t.Errorf("SessionName(%q) = %q, want %q", in, got, want)
 		}
 	}
 	src := map[string]string{
 		"owner/repo":                "sources/github/owner/repo",
 		"github/owner/repo":         "sources/github/owner/repo",
 		"sources/github/owner/repo": "sources/github/owner/repo",
+		"owner/repo#1":              "sources/github/owner/repo%231",
 	}
 	for in, want := range src {
 		if got := SourceName(in); got != want {
-			t.Errorf("SourceName(%q) = %q", in, got)
+			t.Errorf("SourceName(%q) = %q, want %q", in, got, want)
 		}
 	}
 	s := Session{SourceContext: &SourceContext{Source: "sources/github/acme/app", GitHubRepoContext: &GitHubRepoContext{StartingBranch: "main"}}}

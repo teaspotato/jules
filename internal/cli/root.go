@@ -64,9 +64,6 @@ func (a *app) api() (*api.Client, error) {
 		return nil, withCode(ExitAuth, err)
 	}
 	a.client = api.New(key)
-	if base := os.Getenv("JULES_API_BASE"); base != "" {
-		a.client.BaseURL = base
-	}
 	a.client.UserAgent = "jules-tui/" + a.version
 	return a.client, nil
 }

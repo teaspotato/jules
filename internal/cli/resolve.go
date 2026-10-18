@@ -15,6 +15,7 @@ func sessionID(arg string) string {
 	if i := strings.Index(arg, "/session/"); i >= 0 {
 		arg = arg[i+len("/session/"):]
 		arg, _, _ = strings.Cut(arg, "?")
+		arg, _, _ = strings.Cut(arg, "#")
 		arg = strings.Trim(arg, "/")
 	}
 	return strings.TrimPrefix(arg, "sessions/")

@@ -73,8 +73,7 @@ jules archive 3186 / jules unarchive 3186 / jules delete 3186 [--yes]
 Exit codes: `0` ok, `1` error, `2` usage, `3` auth, `4` not found, `5` session failed (`wait`),
 `6` timed out (`wait`, `send --wait`).
 
-Environment: `JULES_API_KEY`, `NO_COLOR`, `JULES_NO_CACHE=1` to disable the cache,
-`JULES_API_BASE` to point at another endpoint.
+Environment: `JULES_API_KEY`, `NO_COLOR`, `JULES_NO_CACHE=1` to disable the cache.
 
 ## Notes on the API
 

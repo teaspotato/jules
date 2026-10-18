@@ -129,10 +129,15 @@ func (sm *sessionModel) refresh(m *model, stickToBottom bool) {
 		}
 		content += "\n\n" + t.User.Render("● You") + " " + label + "\n" + render.Indent(t.Markdown(p.text, o.Width-2), "  ")
 	}
-	if !api.IsTerminal(sm.s.State) && !api.NeedsAttention(sm.s.State) || sm.waiting {
+	if sm.loading && len(sm.tl.Activities) == 0 {
+		if content != "" {
+			content += "\n\n"
+		}
+		content += t.Faint.Render("Loading timeline…")
+	} else if !api.IsTerminal(sm.s.State) && !api.NeedsAttention(sm.s.State) || sm.waiting {
 		content += "\n\n" + t.Accent.Render(sm.spin.View()+" Jules is working…")
 	}
-	if api.NeedsAttention(sm.s.State) && !sm.waiting {
+	if api.NeedsAttention(sm.s.State) && !sm.waiting && !sm.loading {
 		hint := "Jules is waiting for your reply. Press i to write one."
 		if sm.s.State == api.StateAwaitingPlanApproval {
 			hint = "Jules is waiting for plan approval. Press a to approve, or i to request changes."
@@ -377,9 +382,6 @@ func (sm *sessionModel) view(m *model) string {
 	hints := "i message · a approve · d diffs · e expand · y copy patch · o web · p PR · esc back · ? help"
 	if sm.composing {
 		hints = "enter send · alt+enter newline · esc stop typing"
-	}
-	if sm.loading && len(sm.tl.Activities) == 0 {
-		sm.vp.SetContent("\n  " + t.Faint.Render("Loading timeline…"))
 	}
 	return sm.header(m) + "\n" + divider + "\n" + sm.vp.View() + "\n" + composer + "\n" + m.footer(hints)
 }

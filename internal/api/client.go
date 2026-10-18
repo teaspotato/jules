@@ -217,10 +217,8 @@ func parseError(resp *http.Response, data []byte) *Error {
 
 // SessionName normalises "abc" or "sessions/abc" to "sessions/abc".
 func SessionName(id string) string {
-	if strings.HasPrefix(id, "sessions/") {
-		return id
-	}
-	return "sessions/" + id
+	id = strings.TrimPrefix(id, "sessions/")
+	return "sessions/" + url.PathEscape(id)
 }
 
 // SourceName normalises "owner/repo", "github/owner/repo" or
@@ -228,12 +226,17 @@ func SessionName(id string) string {
 func SourceName(s string) string {
 	switch {
 	case strings.HasPrefix(s, "sources/"):
-		return s
+		s = strings.TrimPrefix(s, "sources/")
 	case strings.HasPrefix(s, "github/"):
-		return "sources/" + s
+		// already prefixed with github/
 	default:
-		return "sources/github/" + s
+		s = "github/" + s
 	}
+	parts := strings.Split(s, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return "sources/" + strings.Join(parts, "/")
 }
 
 // Page is one page of a list call.

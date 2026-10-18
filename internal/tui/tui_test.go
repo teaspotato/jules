@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/teaspotato/jules/internal/api"
+	"github.com/teaspotato/jules/internal/cache"
 )
 
 func TestListSortsAttentionFirstAndFilters(t *testing.T) {
@@ -43,6 +45,16 @@ func TestReconcileDropsEchoedMessage(t *testing.T) {
 	sm.reconcile([]api.Activity{{Name: "b", Originator: "agent", AgentMessaged: &api.AgentMessaged{AgentMessage: "ok"}}})
 	if sm.waiting {
 		t.Fatal("still waiting after agent reply")
+	}
+}
+
+func TestSessionInitialPromptWhileLoading(t *testing.T) {
+	m := newModel(t.Context(), api.New("k"), cache.Cache{})
+	m.width, m.height = 80, 24
+	m.openSession(api.Session{ID: "1", Prompt: "Fix the login redirect", State: api.StateInProgress})
+	got := m.View()
+	if !strings.Contains(got, "Fix the login redirect") || !strings.Contains(got, "Loading timeline…") {
+		t.Fatalf("expected prompt and loading indicator in view:\n%s", got)
 	}
 }
 
