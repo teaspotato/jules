@@ -234,3 +234,18 @@ func TestNames(t *testing.T) {
 		t.Fatalf("repo=%q branch=%q", s.Repo(), s.Branch())
 	}
 }
+
+func TestBecameBlocked(t *testing.T) {
+	prev := map[string]string{"a": GroupWorking, "b": GroupWorking, "c": GroupBlocked, "d": GroupWorking}
+	cur := []Session{
+		{ID: "a", State: StateAwaitingUserFeedback},
+		{ID: "b", State: StateInProgress},
+		{ID: "c", State: StateAwaitingPlanApproval}, // already blocked
+		{ID: "d", State: StateFailed, Archived: true},
+		{ID: "e", State: StatePaused}, // new
+	}
+	got := BecameBlocked(prev, cur)
+	if len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("BecameBlocked = %v", got)
+	}
+}

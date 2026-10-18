@@ -29,16 +29,14 @@ var tabNames = [numTabs]string{"working", "blocked", "done", "archived"}
 
 // tabOf places a session in exactly one tab.
 func tabOf(s api.Session) int {
-	if s.Archived {
+	switch api.Group(s) {
+	case api.GroupArchived:
 		return tabArchived
-	}
-	switch s.State {
-	case api.StateAwaitingPlanApproval, api.StateAwaitingUserFeedback, api.StatePaused, api.StateFailed:
+	case api.GroupBlocked:
 		return tabBlocked
-	case api.StateCompleted:
+	case api.GroupDone:
 		return tabDone
 	}
-	// QUEUED, PLANNING, IN_PROGRESS, and anything new or unspecified.
 	return tabWorking
 }
 

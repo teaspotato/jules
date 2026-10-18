@@ -47,7 +47,7 @@ background. Press `?` for help.
 | Session | `j/k`, `ctrl+d/u`, `g/G` scroll, `i` or `m` write a message (`enter` sends, `alt+enter` newline), `a` approve plan, `d` full diffs, `e` expand prompt and output, `y` copy latest patch, `o`/`p` open session/PR, `esc` back |
 | New session | `tab` next field, `↑/↓` pick repo or branch, `space` toggle option, `ctrl+r` recall a recent prompt, `ctrl+s` start, `esc` cancel |
 
-Sessions that need you (awaiting plan approval or input) are pinned to the top. An open session
+Sessions that need you (awaiting plan approval or input) are pinned to the top. The list refreshes every 30 seconds, and when a working session becomes blocked the terminal bell rings and the footer names it. An open session
 polls every few seconds while Jules is working, more slowly while it waits for you, and stops when
 it finishes. Messages you send appear immediately and are reconciled when Jules records them.
 
@@ -66,6 +66,7 @@ echo "prompt" | jules new --repo owner/repo     # prompt from stdin
 jules send 3186 "Please also add tests" --wait  # block until Jules replies, then print it
 jules approve 3186
 jules wait 3186 --until needs-input             # or: completed (default), or a state name
+jules watch                                     # print (and ring the bell) when a working session becomes blocked
 jules patch 3186 | git apply                    # latest change set as a unified diff
 jules open 3186 [--pr]
 jules archive 3186 / jules unarchive 3186 / jules delete 3186 [--yes]
