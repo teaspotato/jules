@@ -736,9 +736,14 @@ func newPatchCmd(a *app) *cobra.Command {
 				return a.printNDJSON(cs)
 			}
 			if showMsg && cs.GitPatch.SuggestedCommitMessage != "" {
-				fmt.Fprintln(a.errOut, cs.GitPatch.SuggestedCommitMessage)
+				fmt.Fprintln(a.errOut, render.CommitMessage(cs.GitPatch.SuggestedCommitMessage))
 			}
 			patch := cs.GitPatch.UnidiffPatch
+			if strings.TrimSpace(patch) == "" {
+				// Nothing on stdout, so `| git apply` stays a no-op.
+				fmt.Fprintf(a.errOut, "jules: session %s's change set is an empty diff\n", s.ID)
+				return nil
+			}
 			if !strings.HasSuffix(patch, "\n") {
 				patch += "\n"
 			}

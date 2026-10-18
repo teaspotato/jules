@@ -512,6 +512,15 @@ func (t *Theme) Artifact(a api.Artifact, o Options, width int) string {
 	return ""
 }
 
+// CommitMessage undoes the literal "\n" escapes Jules sometimes leaves in
+// suggested commit messages.
+func CommitMessage(msg string) string {
+	if !strings.Contains(msg, "\n") && strings.Contains(msg, `\n`) {
+		msg = strings.ReplaceAll(msg, `\n`, "\n")
+	}
+	return msg
+}
+
 // Bash renders a command and its output, tail-collapsed unless expanded.
 func (t *Theme) Bash(bo *api.BashOutput, expand bool, width int) string {
 	exit := t.OK.Render("exit 0")
@@ -580,6 +589,13 @@ func (t *Theme) ChangeSet(cs *api.ChangeSet, expand bool, width int) string {
 		return t.Faint.Render("± empty change set")
 	}
 	gp := cs.GitPatch
+	if strings.TrimSpace(gp.UnidiffPatch) == "" {
+		out := t.FileHdr.Render("± No changes") + t.Faint.Render(" · empty diff")
+		if gp.BaseCommitID != "" {
+			out += t.Faint.Render("  base " + short(gp.BaseCommitID))
+		}
+		return out
+	}
 	stats := DiffStats(gp.UnidiffPatch)
 	var adds, dels int
 	for _, s := range stats {
@@ -593,7 +609,7 @@ func (t *Theme) ChangeSet(cs *api.ChangeSet, expand bool, width int) string {
 	if gp.BaseCommitID != "" {
 		b.WriteString(t.Faint.Render("  base " + short(gp.BaseCommitID)))
 	}
-	if msg := strings.TrimSpace(gp.SuggestedCommitMessage); msg != "" {
+	if msg := strings.TrimSpace(CommitMessage(gp.SuggestedCommitMessage)); msg != "" {
 		first, _, _ := strings.Cut(msg, "\n")
 		b.WriteString("\n" + t.Faint.Render("commit: ") + truncate(first, width-8))
 	}

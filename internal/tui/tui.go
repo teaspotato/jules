@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -65,6 +67,11 @@ type model struct {
 
 	opSem chan struct{} // bounds concurrent archive/delete calls
 
+	// API calls in flight, by label, shown with a spinner so every call
+	// has visible feedback.
+	busy map[string]int
+	spin spinner.Model
+
 	toast      string
 	toastBad   bool
 	toastUntil time.Time
@@ -73,7 +80,8 @@ type model struct {
 func newModel(ctx context.Context, c *api.Client, ch cache.Cache) *model {
 	th := render.NewTheme(os.Stdout)
 	m := &model{ctx: ctx, client: c, cache: ch, theme: th, st: newStyles(th),
-		opSem: make(chan struct{}, opConcurrency)}
+		opSem: make(chan struct{}, opConcurrency), busy: map[string]int{},
+		spin: spinner.New(spinner.WithSpinner(spinner.MiniDot))}
 	m.list = newList()
 	if ss, ok := ch.Sessions(); ok {
 		m.list.setSessions(ss, time.Time{})
@@ -149,6 +157,12 @@ type opMsg struct {
 // quickly without tripping rate limits.
 const opConcurrency = 6
 
+// trackedMsg wraps the result of a call started with track.
+type trackedMsg struct {
+	label string
+	msg   tea.Msg
+}
+
 type toastMsg struct {
 	text string
 	bad  bool
@@ -156,47 +170,80 @@ type toastMsg struct {
 
 // ---- commands --------------------------------------------------------------
 
+// track runs cmd while showing label in the activity indicator.
+func (m *model) track(label string, cmd tea.Cmd) tea.Cmd {
+	idle := len(m.busy) == 0
+	m.busy[label]++
+	wrapped := func() tea.Msg { return trackedMsg{label, cmd()} }
+	if idle {
+		return tea.Batch(wrapped, m.spin.Tick)
+	}
+	return wrapped
+}
+
+// activity describes the calls in flight, e.g. "⠋ sending · refreshing…",
+// or "" when idle.
+func (m *model) activity() string {
+	if len(m.busy) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(m.busy))
+	for l := range m.busy {
+		labels = append(labels, l)
+	}
+	sort.Strings(labels)
+	return m.spin.View() + " " + strings.Join(labels, " · ") + "…"
+}
+
 func (m *model) fetchSessions() tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	label := "refreshing sessions"
+	if len(m.list.all) == 0 {
+		label = "loading sessions"
+	}
+	return m.track(label, func() tea.Msg {
 		started := time.Now()
 		ss, err := c.ListSessions(ctx, true) // archived ones fill their own tab
 		return sessionsMsg{ss, err, started}
-	}
+	})
 }
 
 func (m *model) fetchSources() tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	return m.track("loading repos", func() tea.Msg {
 		src, err := c.ListSources(ctx)
 		return sourcesMsg{src, err}
-	}
+	})
 }
 
 func (m *model) fetchActivities(id string, since time.Time) tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	label := "refreshing timeline"
+	if since.IsZero() {
+		label = "loading timeline"
+	}
+	return m.track(label, func() tea.Msg {
 		acts, err := c.ListActivitiesSince(ctx, id, since)
 		if err != nil {
 			return activitiesMsg{id: id, err: err}
 		}
 		s, err := c.GetSession(ctx, id)
 		return activitiesMsg{id: id, acts: acts, session: s, err: err}
-	}
+	})
 }
 
 func (m *model) sendMessage(id, text string) tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	return m.track("sending", func() tea.Msg {
 		return sentMsg{id, text, c.SendMessage(ctx, id, text)}
-	}
+	})
 }
 
 func (m *model) approvePlan(id string) tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	return m.track("approving plan", func() tea.Msg {
 		return approvedMsg{id, c.ApprovePlan(ctx, id)}
-	}
+	})
 }
 
 // batch runs action on each session in parallel (bounded), one opMsg per
@@ -209,6 +256,9 @@ func (m *model) batch(action string, ss []api.Session) tea.Cmd {
 		actDelete:    c.DeleteSession,
 	}[action]
 	var cmds []tea.Cmd
+	if len(m.busy) == 0 && len(m.list.jobs) == 0 {
+		cmds = append(cmds, m.spin.Tick)
+	}
 	for _, s := range ss {
 		if !m.list.startOp(action, s.ID) {
 			continue // already in flight
@@ -229,10 +279,10 @@ func (m *model) batch(action string, ss []api.Session) tea.Cmd {
 
 func (m *model) createSession(req api.CreateSessionRequest) tea.Cmd {
 	c, ctx := m.client, m.ctx
-	return func() tea.Msg {
+	return m.track("starting session", func() tea.Msg {
 		s, err := c.CreateSession(ctx, req)
 		return createdMsg{s, err}
-	}
+	})
 }
 
 func tickAfter(d time.Duration, msg tea.Msg) tea.Cmd {
@@ -284,6 +334,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toastMsg:
 		m.flash(msg.text, msg.bad)
 		return m, nil
+
+	case trackedMsg:
+		if m.busy[msg.label]--; m.busy[msg.label] <= 0 {
+			delete(m.busy, msg.label)
+		}
+		return m.Update(msg.msg)
+
+	case spinner.TickMsg:
+		if msg.ID == m.spin.ID() {
+			if len(m.busy) == 0 && len(m.list.jobs) == 0 {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.spin, cmd = m.spin.Update(msg)
+			return m, cmd
+		}
 
 	case sessionsMsg:
 		m.list.loading = false

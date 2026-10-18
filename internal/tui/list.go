@@ -510,15 +510,15 @@ func (m *model) listView() string {
 	}
 	right := ""
 	switch {
-	case l.loading && l.stale:
-		right = t.Faint.Render("cached · refreshing…")
-	case l.loading:
-		right = t.Faint.Render("loading…")
+	case l.progress() != "":
+		right = t.Warn.Render(m.spin.View() + " " + l.progress() + "…")
+	case m.activity() != "":
+		right = t.Faint.Render(m.activity())
+		if l.stale {
+			right = t.Faint.Render("cached · ") + right
+		}
 	case l.err != nil:
 		right = t.Bad.Render("offline")
-	}
-	if p := l.progress(); p != "" {
-		right = t.Warn.Render(p + "…")
 	}
 	header := m.st.header.Render(spread(left, right, m.width-2))
 

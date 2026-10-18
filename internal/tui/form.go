@@ -332,7 +332,7 @@ func (f *formModel) view(m *model) string {
 
 	hints := "tab next field · ↑/↓ pick · space toggle · ctrl+r recent prompt · ctrl+s start · esc cancel"
 	if f.submitting {
-		hints = "Starting session…"
+		hints = m.activity()
 	}
 	body := b.String()
 	return fit(body, m.height-1) + "\n" + m.footer(hints)

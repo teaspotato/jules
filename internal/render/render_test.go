@@ -100,3 +100,16 @@ func TestStateLabels(t *testing.T) {
 		t.Fatal("labels")
 	}
 }
+
+func TestEmptyChangeSet(t *testing.T) {
+	out := plain().ChangeSet(&api.ChangeSet{GitPatch: &api.GitPatch{BaseCommitID: "abc", SuggestedCommitMessage: `fix: x\n\nbody`}}, false, 80)
+	if !strings.Contains(out, "No changes") || !strings.Contains(out, "empty diff") {
+		t.Fatalf("empty change set rendered as %q", out)
+	}
+	if got := CommitMessage(`fix: x\n\nbody`); got != "fix: x\n\nbody" {
+		t.Fatalf("CommitMessage = %q", got)
+	}
+	if got := CommitMessage("a\\nb\nc"); got != "a\\nb\nc" {
+		t.Fatalf("real newlines must leave escapes alone, got %q", got)
+	}
+}

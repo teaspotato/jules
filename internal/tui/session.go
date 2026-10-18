@@ -218,6 +218,17 @@ func (m *model) updateSession(msg tea.Msg) tea.Cmd {
 		sm.refresh(m, atBottom || first)
 		return sm.poll(m, sm.interval())
 
+	case toggleDiffsMsg:
+		if msg.id != sm.s.ID {
+			return nil
+		}
+		sm.expandDiffs = !sm.expandDiffs
+		sm.refresh(m, false)
+		if sm.expandDiffs && sm.changeSet() == nil {
+			m.flash("No changes in this session yet", false)
+		}
+		return nil
+
 	case sessionTickMsg:
 		if msg.id != sm.s.ID || msg.gen != sm.gen {
 			return nil
@@ -316,8 +327,17 @@ func (sm *sessionModel) updateKeys(m *model, k tea.KeyMsg) tea.Cmd {
 		}
 		return m.approvePlan(sm.s.ID)
 	case "d":
-		sm.expandDiffs = !sm.expandDiffs
-		sm.refresh(m, false)
+		// Big diffs take a moment to render: show the indicator for a
+		// frame first, then render.
+		label := "rendering diffs"
+		if sm.expandDiffs {
+			label = "collapsing diffs"
+		}
+		id := sm.s.ID
+		return m.track(label, func() tea.Msg {
+			time.Sleep(30 * time.Millisecond)
+			return toggleDiffsMsg{id}
+		})
 	case "e":
 		sm.expand = !sm.expand
 		sm.refresh(m, false)
@@ -332,18 +352,16 @@ func (sm *sessionModel) updateKeys(m *model, k tea.KeyMsg) tea.Cmd {
 	case "p":
 		return openPR(sm.s)
 	case "y":
-		cs := api.LatestChangeSet(sm.tl.Activities)
-		for i := len(sm.s.Outputs) - 1; i >= 0; i-- {
-			if o := sm.s.Outputs[i].ChangeSet; o != nil && o.GitPatch != nil {
-				cs = o
-				break
-			}
-		}
+		cs := sm.changeSet()
 		if cs == nil {
 			m.flash("No changes to copy yet", true)
 			return nil
 		}
 		patch := cs.GitPatch.UnidiffPatch
+		if strings.TrimSpace(patch) == "" {
+			m.flash("The diff is empty; nothing to copy", true)
+			return nil
+		}
 		return func() tea.Msg {
 			if err := browser.Copy(patch); err != nil {
 				return toastMsg{"Copy failed: " + err.Error(), true}
@@ -358,6 +376,20 @@ func (sm *sessionModel) updateKeys(m *model, k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// toggleDiffsMsg flips diff expansion once the indicator has been drawn.
+type toggleDiffsMsg struct{ id string }
+
+// changeSet is the session's final change set, else the latest one in the
+// timeline, or nil.
+func (sm *sessionModel) changeSet() *api.ChangeSet {
+	for i := len(sm.s.Outputs) - 1; i >= 0; i-- {
+		if o := sm.s.Outputs[i].ChangeSet; o != nil && o.GitPatch != nil {
+			return o
+		}
+	}
+	return api.LatestChangeSet(sm.tl.Activities)
+}
+
 func (sm *sessionModel) view(m *model) string {
 	t := m.theme
 	box := m.st.border
@@ -369,6 +401,9 @@ func (sm *sessionModel) view(m *model) string {
 	scroll := ""
 	if sm.vp.TotalLineCount() > sm.vp.Height {
 		scroll = t.Faint.Render(" " + percent(sm.vp.ScrollPercent()))
+	}
+	if a := m.activity(); a != "" {
+		scroll = t.Accent.Render(" "+a+" ") + scroll
 	}
 	divider := t.Faint.Render(strings.Repeat("─", max(0, m.width-lipgloss.Width(scroll)))) + scroll
 
