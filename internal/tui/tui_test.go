@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func TestListSortsAttentionFirstAndFilters(t *testing.T) {
 		{ID: "1", Title: "old done", State: api.StateCompleted, UpdateTime: now},
 		{ID: "2", Title: "needs me", State: api.StateAwaitingPlanApproval, UpdateTime: now.Add(-time.Hour)},
 		{ID: "3", Title: "failed thing", State: api.StateFailed, UpdateTime: now.Add(-time.Minute)},
-	})
+	}, time.Time{})
 	// Opens on blocked: awaiting approval and failed, attention first.
 	if got := ids(l.visible); len(got) != 2 || got[0] != "2" || got[1] != "3" {
 		t.Fatalf("blocked = %v", got)
@@ -72,7 +73,7 @@ func TestSelectionTargets(t *testing.T) {
 		{ID: "b", State: api.StateCompleted, UpdateTime: now.Add(-time.Minute)},
 		{ID: "c", State: api.StateCompleted, UpdateTime: now.Add(-2 * time.Minute)},
 		{ID: "d", State: api.StateCompleted, UpdateTime: now.Add(-3 * time.Minute)},
-	})
+	}, time.Time{})
 	// Nothing selected: the current row.
 	if got := ids(l.targets()); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("targets = %v", got)
@@ -80,13 +81,19 @@ func TestSelectionTargets(t *testing.T) {
 	// Visual range a..c survives a refresh, plus a separate mark on d.
 	l.visual, l.anchor, l.anchorID = true, 0, "a"
 	l.move(2)
-	l.setSessions(l.all)
+	l.setSessions(l.all, time.Time{})
 	l.marked["d"] = true
 	if got := ids(l.targets()); len(got) != 4 {
 		t.Fatalf("targets = %v", got)
 	}
-	l.remove([]string{"a", "d"})
 	l.clearSelection()
+	for _, id := range []string{"a", "d"} {
+		l.startOp(actDelete, id)
+	}
+	l.finishOp(actDelete, "a", nil)
+	if j := l.finishOp(actDelete, "d", nil); j == nil || j.done != 2 {
+		t.Fatalf("job = %+v", j)
+	}
 	if got := ids(l.visible); len(got) != 2 || got[0] != "b" {
 		t.Fatalf("after delete = %v", got)
 	}
@@ -100,17 +107,43 @@ func TestTabsAndArchive(t *testing.T) {
 		{ID: "c", State: api.StateCompleted},
 		{ID: "x", State: api.StateFailed, Archived: true},
 		{ID: "n", State: "SOMETHING_NEW"},
-	})
+	}, time.Time{})
 	want := map[string]int{"q": tabWorking, "n": tabWorking, "p": tabBlocked, "c": tabDone, "x": tabArchived}
 	for _, s := range l.all {
 		if got := tabOf(s); got != want[s.ID] {
 			t.Errorf("tabOf(%s) = %s", s.ID, tabNames[got])
 		}
 	}
-	l.setArchived([]string{"c"}, true)
+	before := time.Now()
+	l.startOp(actArchive, "c")
+	if l.progress() != "archiving 0/1" {
+		t.Fatalf("progress = %q", l.progress())
+	}
+	l.finishOp(actArchive, "c", nil)
+	// A fetch that began before the archive landed must not undo it.
+	stale := []api.Session{{ID: "c", State: api.StateCompleted}, {ID: "x", State: api.StateFailed, Archived: true}}
+	l.setSessions(stale, before.Add(-time.Second))
 	l.filter = tabArchived
 	l.apply()
 	if got := ids(l.visible); len(got) != 2 {
 		t.Fatalf("archived = %v", got)
+	}
+}
+
+func TestEditsExpire(t *testing.T) {
+	l := newList()
+	l.setSessions([]api.Session{{ID: "a", State: api.StateCompleted}}, time.Time{})
+	l.startOp(actDelete, "a")
+	l.finishOp(actDelete, "a", nil)
+	// A later fetch reflects the delete; its edit is dropped, so a session
+	// that somehow comes back is shown again.
+	l.setSessions([]api.Session{{ID: "a", State: api.StateCompleted}}, time.Now().Add(time.Second))
+	if len(l.edits) != 0 || len(l.all) != 1 {
+		t.Fatalf("edits = %v, all = %v", l.edits, ids(l.all))
+	}
+	// A failed call leaves the session alone.
+	l.startOp(actArchive, "a")
+	if j := l.finishOp(actArchive, "a", errors.New("boom")); j == nil || j.failed != 1 || l.all[0].Archived {
+		t.Fatalf("job = %+v", j)
 	}
 }

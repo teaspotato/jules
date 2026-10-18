@@ -63,6 +63,8 @@ type model struct {
 
 	sources []api.Source
 
+	opSem chan struct{} // bounds concurrent archive/delete calls
+
 	toast      string
 	toastBad   bool
 	toastUntil time.Time
@@ -70,10 +72,11 @@ type model struct {
 
 func newModel(ctx context.Context, c *api.Client, ch cache.Cache) *model {
 	th := render.NewTheme(os.Stdout)
-	m := &model{ctx: ctx, client: c, cache: ch, theme: th, st: newStyles(th)}
+	m := &model{ctx: ctx, client: c, cache: ch, theme: th, st: newStyles(th),
+		opSem: make(chan struct{}, opConcurrency)}
 	m.list = newList()
 	if ss, ok := ch.Sessions(); ok {
-		m.list.setSessions(ss)
+		m.list.setSessions(ss, time.Time{})
 		m.list.loading = false
 		m.list.stale = true
 	}
@@ -92,6 +95,7 @@ func (m *model) Init() tea.Cmd {
 type sessionsMsg struct {
 	sessions []api.Session
 	err      error
+	started  time.Time // when the fetch began; newer local edits win
 }
 
 type sourcesMsg struct {
@@ -135,12 +139,15 @@ const (
 	actDelete    = "delete"
 )
 
-type batchMsg struct {
-	action string
-	done   []string
-	err    error // first failure, if any
-	failed int
+// opMsg reports one session's archive/unarchive/delete call.
+type opMsg struct {
+	action, id string
+	err        error
 }
+
+// opConcurrency bounds parallel calls in a batch so big selections finish
+// quickly without tripping rate limits.
+const opConcurrency = 6
 
 type toastMsg struct {
 	text string
@@ -152,8 +159,9 @@ type toastMsg struct {
 func (m *model) fetchSessions() tea.Cmd {
 	c, ctx := m.client, m.ctx
 	return func() tea.Msg {
+		started := time.Now()
 		ss, err := c.ListSessions(ctx, true) // archived ones fill their own tab
-		return sessionsMsg{ss, err}
+		return sessionsMsg{ss, err, started}
 	}
 }
 
@@ -191,6 +199,8 @@ func (m *model) approvePlan(id string) tea.Cmd {
 	}
 }
 
+// batch runs action on each session in parallel (bounded), one opMsg per
+// session so the list can show progress as calls land.
 func (m *model) batch(action string, ss []api.Session) tea.Cmd {
 	c, ctx := m.client, m.ctx
 	call := map[string]func(context.Context, string) error{
@@ -198,20 +208,23 @@ func (m *model) batch(action string, ss []api.Session) tea.Cmd {
 		actUnarchive: c.UnarchiveSession,
 		actDelete:    c.DeleteSession,
 	}[action]
-	return func() tea.Msg {
-		msg := batchMsg{action: action}
-		for _, s := range ss {
-			if err := call(ctx, s.ID); err != nil {
-				msg.failed++
-				if msg.err == nil {
-					msg.err = err
-				}
-				continue
-			}
-			msg.done = append(msg.done, s.ID)
+	var cmds []tea.Cmd
+	for _, s := range ss {
+		if !m.list.startOp(action, s.ID) {
+			continue // already in flight
 		}
-		return msg
+		id := s.ID
+		cmds = append(cmds, func() tea.Msg {
+			select {
+			case m.opSem <- struct{}{}:
+			case <-ctx.Done():
+				return opMsg{action, id, ctx.Err()}
+			}
+			defer func() { <-m.opSem }()
+			return opMsg{action, id, call(ctx, id)}
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) createSession(req api.CreateSessionRequest) tea.Cmd {
@@ -282,7 +295,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.err = nil
 			m.list.stale = false
 			m.list.backoff = pollList
-			m.list.setSessions(msg.sessions)
+			m.list.setSessions(msg.sessions, msg.started)
 			m.cache.PutSessions(msg.sessions)
 		}
 		m.list.gen++
@@ -304,27 +317,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case batchMsg:
-		m.list.busy = false
-		if msg.action == actDelete {
-			m.list.remove(msg.done)
-		} else {
-			m.list.setArchived(msg.done, msg.action == actArchive)
-		}
-		m.list.clearSelection()
-		m.cache.PutSessions(m.list.all)
-		verb := map[string]string{actArchive: "Archived", actUnarchive: "Unarchived", actDelete: "Deleted"}[msg.action]
-		noun := "sessions"
-		if len(msg.done) == 1 {
-			noun = "session"
-		}
-		switch {
-		case msg.err != nil && len(msg.done) > 0:
-			m.flash(fmt.Sprintf("%s %d; %d failed: %s", verb, len(msg.done), msg.failed, errText(msg.err)), true)
-		case msg.err != nil:
-			m.flash("Couldn't "+msg.action+": "+errText(msg.err), true)
-		default:
-			m.flash(fmt.Sprintf("%s %d %s", verb, len(msg.done), noun), false)
+	case opMsg:
+		if j := m.list.finishOp(msg.action, msg.id, msg.err); j != nil {
+			m.cache.PutSessions(m.list.all)
+			verb := map[string]string{actArchive: "Archived", actUnarchive: "Unarchived", actDelete: "Deleted"}[msg.action]
+			noun := "sessions"
+			if j.done == 1 {
+				noun = "session"
+			}
+			switch {
+			case j.err != nil && j.done > 0:
+				m.flash(fmt.Sprintf("%s %d; %d failed: %s", verb, j.done, j.failed, errText(j.err)), true)
+			case j.err != nil:
+				m.flash("Couldn't "+msg.action+": "+errText(j.err), true)
+			default:
+				m.flash(fmt.Sprintf("%s %d %s", verb, j.done, noun), false)
+			}
 		}
 		return m, nil
 

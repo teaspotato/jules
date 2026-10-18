@@ -275,6 +275,12 @@ func (t *Theme) SessionColumns(width, repoW int) string {
 // SessionRow is one line in a session list: date, repo, name, status.
 // Text matching query (case-insensitive) is highlighted.
 func (t *Theme) SessionRow(s api.Session, width, repoW int, query string) string {
+	return t.SessionRowStatus(s, width, repoW, query, "")
+}
+
+// SessionRowStatus is SessionRow with the status cell replaced by a faint
+// note (such as "archiving…") when status is non-empty.
+func (t *Theme) SessionRowStatus(s api.Session, width, repoW int, query, status string) string {
 	nameW := max(4, width-dateW-repoW-statusW-3*len(colGap))
 	date := fmt.Sprintf("%*s", dateW, Ago(s.UpdateTime))
 	repo := truncate(s.Repo(), repoW)
@@ -288,7 +294,11 @@ func (t *Theme) SessionRow(s api.Session, width, repoW int, query string) string
 	nameCell := t.OK.Render(pr) + t.Highlight(name, query, lipgloss.Style{}) +
 		strings.Repeat(" ", max(0, nameW-lipgloss.Width(pr)-lipgloss.Width(name)))
 
-	return t.Faint.Render(date) + colGap + repoCell + colGap + nameCell + colGap + t.StateBadge(s.State)
+	badge := t.StateBadge(s.State)
+	if status != "" {
+		badge = t.Warn.Render(status)
+	}
+	return t.Faint.Render(date) + colGap + repoCell + colGap + nameCell + colGap + badge
 }
 
 // Highlight renders s with base, marking every case-insensitive match of

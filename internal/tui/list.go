@@ -60,7 +60,13 @@ type listModel struct {
 	anchor   int
 	anchorID string        // keeps the range anchored across refreshes
 	confirm  []api.Session // sessions awaiting delete confirmation
-	busy     bool          // an archive/delete batch is in flight
+
+	// Archive/unarchive/delete calls: in flight per session, progress per
+	// action, and finished local edits that a list fetch started before
+	// they landed must not undo.
+	pending map[string]string
+	jobs    map[string]*job
+	edits   map[string]edit
 
 	loading bool
 	stale   bool // showing cached data while the first fetch runs
@@ -74,8 +80,96 @@ func newList() listModel {
 	ti.Prompt = "/ "
 	ti.Placeholder = "search title, prompt, repo or id"
 	// Open on what needs you.
-	return listModel{loading: true, search: ti, backoff: pollList, marked: map[string]bool{}, filter: tabBlocked}
+	return listModel{loading: true, search: ti, backoff: pollList, marked: map[string]bool{}, filter: tabBlocked,
+		pending: map[string]string{}, jobs: map[string]*job{}, edits: map[string]edit{}}
 }
+
+// job tracks one action's progress across its in-flight calls.
+type job struct {
+	total, done, failed int
+	err                 error // first failure
+}
+
+// edit is a change made locally after a successful call.
+type edit struct {
+	action string
+	at     time.Time
+}
+
+// startOp records an in-flight call; false if the session already has one.
+func (l *listModel) startOp(action, id string) bool {
+	if _, busy := l.pending[id]; busy {
+		return false
+	}
+	l.pending[id] = action
+	j := l.jobs[action]
+	if j == nil {
+		j = &job{}
+		l.jobs[action] = j
+	}
+	j.total++
+	return true
+}
+
+// finishOp applies a finished call. It returns the action's job once every
+// call in it has finished, so the caller can report the outcome.
+func (l *listModel) finishOp(action, id string, err error) *job {
+	delete(l.pending, id)
+	j := l.jobs[action]
+	if j == nil {
+		return nil
+	}
+	if err != nil {
+		j.failed++
+		if j.err == nil {
+			j.err = err
+		}
+	} else {
+		j.done++
+		l.edits[id] = edit{action, time.Now()}
+		l.applyEdit(id, action)
+		l.apply()
+		l.clamp()
+	}
+	if j.done+j.failed < j.total {
+		return nil
+	}
+	delete(l.jobs, action)
+	return j
+}
+
+func (l *listModel) applyEdit(id, action string) {
+	if action == actDelete {
+		delete(l.marked, id)
+		kept := l.all[:0]
+		for _, s := range l.all {
+			if s.ID != id {
+				kept = append(kept, s)
+			}
+		}
+		l.all = kept
+		return
+	}
+	for i := range l.all {
+		if l.all[i].ID == id {
+			l.all[i].Archived = action == actArchive
+			l.all[i].Raw = nil // Raw would re-emit the stale flag
+		}
+	}
+}
+
+// progress describes in-flight calls, e.g. "archiving 3/12", or "".
+func (l *listModel) progress() string {
+	var parts []string
+	for _, a := range []string{actArchive, actUnarchive, actDelete} {
+		if j := l.jobs[a]; j != nil {
+			parts = append(parts, fmt.Sprintf("%s %d/%d", opVerb[a], j.done+j.failed, j.total))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+var opVerb = map[string]string{actArchive: "archiving", actUnarchive: "unarchiving", actDelete: "deleting"}
 
 func (l *listModel) resize(w, h int) {
 	l.width, l.height = w, max(1, h-3) // header, filter line, column header
@@ -119,38 +213,6 @@ func (l *listModel) clearSelection() {
 	l.visual = false
 }
 
-// setArchived flips the archived flag locally after a successful call.
-func (l *listModel) setArchived(ids []string, archived bool) {
-	set := map[string]bool{}
-	for _, id := range ids {
-		set[id] = true
-	}
-	for i := range l.all {
-		if set[l.all[i].ID] {
-			l.all[i].Archived = archived
-			l.all[i].Raw = nil // Raw would re-emit the stale flag
-		}
-	}
-	l.apply()
-}
-
-// remove drops deleted sessions from the list.
-func (l *listModel) remove(ids []string) {
-	gone := map[string]bool{}
-	for _, id := range ids {
-		gone[id] = true
-		delete(l.marked, id)
-	}
-	kept := l.all[:0]
-	for _, s := range l.all {
-		if !gone[s.ID] {
-			kept = append(kept, s)
-		}
-	}
-	l.all = kept
-	l.apply()
-}
-
 func (l *listModel) selected() *api.Session {
 	if l.cursor < 0 || l.cursor >= len(l.visible) {
 		return nil
@@ -158,12 +220,22 @@ func (l *listModel) selected() *api.Session {
 	return &l.visible[l.cursor]
 }
 
-func (l *listModel) setSessions(ss []api.Session) {
+// setSessions replaces the list with a fetch that began at started. Local
+// edits that landed after that are re-applied so a slow fetch can't bring
+// back a session just archived or deleted.
+func (l *listModel) setSessions(ss []api.Session, started time.Time) {
 	var keep string
 	if s := l.selected(); s != nil {
 		keep = s.ID
 	}
 	l.all = ss
+	for id, e := range l.edits {
+		if e.at.Before(started) {
+			delete(l.edits, id) // the fetch already reflects it
+			continue
+		}
+		l.applyEdit(id, e.action)
+	}
 	l.apply()
 	if keep != "" {
 		for i, s := range l.visible {
@@ -257,7 +329,7 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		targets := l.confirm
 		l.confirm = nil
 		if key.String() == "y" || key.String() == "Y" {
-			l.busy = true
+			l.clearSelection()
 			return m.batch(actDelete, targets)
 		}
 		m.flash("Delete cancelled", false)
@@ -325,7 +397,7 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		}
 	case "d", "D", "delete", "u":
 		targets := l.targets()
-		if len(targets) == 0 || l.busy {
+		if len(targets) == 0 {
 			return nil
 		}
 		// Archived tab: u unarchives, d deletes. Elsewhere: d archives,
@@ -333,10 +405,10 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		archived := l.filter == tabArchived
 		switch k := key.String(); {
 		case k == "u" && archived:
-			l.busy = true
+			l.clearSelection()
 			return m.batch(actUnarchive, targets)
 		case k == "d" && !archived:
-			l.busy = true
+			l.clearSelection()
 			return m.batch(actArchive, targets)
 		case k == "D" && !archived, k == "d" && archived, k == "delete":
 			l.confirm = targets
@@ -441,6 +513,9 @@ func (m *model) listView() string {
 	case l.err != nil:
 		right = t.Bad.Render("offline")
 	}
+	if p := l.progress(); p != "" {
+		right = t.Warn.Render(p + "…")
+	}
 	header := m.st.header.Render(spread(left, right, m.width-2))
 
 	// Filter line.
@@ -473,7 +548,11 @@ func (m *model) listView() string {
 		if l.marked[s.ID] || l.inVisual(i) {
 			gutter = t.Warn.Render("●")
 		}
-		row := t.SessionRow(s, rowW, repoW, query)
+		status := ""
+		if a, ok := l.pending[s.ID]; ok {
+			status = opVerb[a] + "…"
+		}
+		row := t.SessionRowStatus(s, rowW, repoW, query, status)
 		switch {
 		case i == l.cursor:
 			row = m.st.selected.Width(m.width).Render("▌" + gutter + row)
