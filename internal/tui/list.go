@@ -12,6 +12,7 @@ import (
 
 	"github.com/teaspotato/jules/internal/api"
 	"github.com/teaspotato/jules/internal/browser"
+	"github.com/teaspotato/jules/internal/render"
 )
 
 // stateFilters cycle with tab.
@@ -38,6 +39,15 @@ type listModel struct {
 	search    textinput.Model
 	searching bool
 
+	// Selection: marked session IDs, plus a visual range from anchor to
+	// cursor while visual is on.
+	marked   map[string]bool
+	visual   bool
+	anchor   int
+	anchorID string        // keeps the range anchored across refreshes
+	confirm  []api.Session // sessions awaiting delete confirmation
+	deleting bool
+
 	loading bool
 	stale   bool // showing cached data while the first fetch runs
 	err     error
@@ -49,12 +59,66 @@ func newList() listModel {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.Placeholder = "search title, prompt, repo or id"
-	return listModel{loading: true, search: ti, backoff: pollList}
+	return listModel{loading: true, search: ti, backoff: pollList, marked: map[string]bool{}}
 }
 
 func (l *listModel) resize(w, h int) {
-	l.width, l.height = w, max(1, h-2) // header + filter line
+	l.width, l.height = w, max(1, h-3) // header, filter line, column header
 	l.clamp()
+}
+
+// inVisual reports whether row i is inside the active visual range.
+func (l *listModel) inVisual(i int) bool {
+	if !l.visual {
+		return false
+	}
+	lo, hi := min(l.anchor, l.cursor), max(l.anchor, l.cursor)
+	return i >= lo && i <= hi
+}
+
+// selection returns the marked and visually selected sessions in list order.
+func (l *listModel) selection() []api.Session {
+	var out []api.Session
+	for i, s := range l.visible {
+		if l.marked[s.ID] || l.inVisual(i) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// targets is what an action applies to: the selection, or else the
+// session under the cursor.
+func (l *listModel) targets() []api.Session {
+	if sel := l.selection(); len(sel) > 0 {
+		return sel
+	}
+	if s := l.selected(); s != nil {
+		return []api.Session{*s}
+	}
+	return nil
+}
+
+func (l *listModel) clearSelection() {
+	l.marked = map[string]bool{}
+	l.visual = false
+}
+
+// remove drops deleted sessions from the list.
+func (l *listModel) remove(ids []string) {
+	gone := map[string]bool{}
+	for _, id := range ids {
+		gone[id] = true
+		delete(l.marked, id)
+	}
+	kept := l.all[:0]
+	for _, s := range l.all {
+		if !gone[s.ID] {
+			kept = append(kept, s)
+		}
+	}
+	l.all = kept
+	l.apply()
 }
 
 func (l *listModel) selected() *api.Session {
@@ -115,6 +179,15 @@ func (l *listModel) apply() {
 		}
 		return l.visible[i].UpdateTime.After(l.visible[j].UpdateTime)
 	})
+	if l.visual {
+		l.visual = false
+		for i, s := range l.visible {
+			if s.ID == l.anchorID {
+				l.visual, l.anchor = true, i
+				break
+			}
+		}
+	}
 	l.clamp()
 }
 
@@ -151,6 +224,17 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	if l.confirm != nil {
+		targets := l.confirm
+		l.confirm = nil
+		if key.String() == "y" || key.String() == "Y" {
+			l.deleting = true
+			return m.deleteSessions(targets)
+		}
+		m.flash("Delete cancelled", false)
+		return nil
+	}
+
 	if l.searching {
 		switch key.String() {
 		case "esc":
@@ -179,12 +263,44 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 
 	switch key.String() {
 	case "q", "esc":
-		if key.String() == "esc" && l.search.Value() != "" {
-			l.search.SetValue("")
-			l.apply()
-			return nil
+		if key.String() == "esc" {
+			switch {
+			case l.visual || len(l.marked) > 0:
+				l.clearSelection()
+				return nil
+			case l.search.Value() != "":
+				l.search.SetValue("")
+				l.apply()
+				return nil
+			}
 		}
 		return tea.Quit
+	case "v":
+		if l.visual {
+			// Leaving visual mode keeps the range as marks.
+			for _, s := range l.selection() {
+				l.marked[s.ID] = true
+			}
+			l.visual = false
+		} else if len(l.visible) > 0 {
+			l.visual, l.anchor, l.anchorID = true, l.cursor, l.visible[l.cursor].ID
+		}
+	case "m", " ":
+		if s := l.selected(); s != nil {
+			if l.marked[s.ID] {
+				delete(l.marked, s.ID)
+			} else {
+				l.marked[s.ID] = true
+			}
+			l.move(1)
+		}
+	case "d", "delete":
+		if l.deleting {
+			return nil
+		}
+		if targets := l.targets(); len(targets) > 0 {
+			l.confirm = targets
+		}
 	case "?":
 		m.showHelp = true
 	case "j", "down":
@@ -301,16 +417,25 @@ func (m *model) listView() string {
 		filterLine += "   " + l.search.View()
 	}
 
-	// Rows, with a divider between attention and the rest.
+	// Rows: a gutter shows the cursor (▌) and marks (●).
 	var rows []string
-	rowW := m.width - 2
+	rowW := m.width - 3
+	repoW := render.RepoWidth(l.visible)
+	query := l.search.Value()
 	for i := l.offset; i < len(l.visible) && len(rows) < l.height; i++ {
 		s := l.visible[i]
-		row := t.SessionRow(s, rowW)
-		if i == l.cursor {
-			row = m.st.selected.Width(m.width).Render("▌" + row)
-		} else {
-			row = " " + row
+		gutter := " "
+		if l.marked[s.ID] || l.inVisual(i) {
+			gutter = t.Warn.Render("●")
+		}
+		row := t.SessionRow(s, rowW, repoW, query)
+		switch {
+		case i == l.cursor:
+			row = m.st.selected.Width(m.width).Render("▌" + gutter + row)
+		case l.inVisual(i):
+			row = m.st.selected.Width(m.width).Render(" " + gutter + row)
+		default:
+			row = " " + gutter + row
 		}
 		rows = append(rows, row)
 	}
@@ -329,8 +454,24 @@ func (m *model) listView() string {
 		rows = append(rows, "", "  "+t.Faint.Render(msg))
 	}
 
-	hints := "enter open · n new · / search · tab filter · a approve · o web · r refresh · ? help · q quit"
-	return header + "\n" + filterLine + "\n" + fit(strings.Join(rows, "\n"), l.height) + "\n" + m.footer(hints)
+	columns := "  " + t.SessionColumns(rowW, repoW)
+
+	hints := "enter open · n new · / search · tab filter · v range · m mark · d delete · a approve · ? help · q quit"
+	if sel := len(l.selection()); sel > 0 || l.visual {
+		hints = fmt.Sprintf("%d selected · v %s · m mark · d delete · esc clear", sel,
+			map[bool]string{true: "end range", false: "range"}[l.visual])
+	}
+	footer := m.footer(hints)
+	if l.confirm != nil {
+		what := "this session"
+		if len(l.confirm) > 1 {
+			what = fmt.Sprintf("%d sessions", len(l.confirm))
+		} else {
+			what = fmt.Sprintf("%q", truncate(l.confirm[0].DisplayTitle(), 50))
+		}
+		footer = t.Bad.Render("Delete "+what+"? This can't be undone.") + t.Faint.Render("  y to delete · any other key cancels")
+	}
+	return header + "\n" + filterLine + "\n" + columns + "\n" + fit(strings.Join(rows, "\n"), l.height) + "\n" + footer
 }
 
 // spread places left and right on one line of width w.

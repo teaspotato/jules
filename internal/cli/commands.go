@@ -195,8 +195,9 @@ func newSessionsCmd(a *app) *cobra.Command {
 			}
 			t := a.theme()
 			w := a.width()
+			repoW := render.RepoWidth(out)
 			for _, s := range out {
-				fmt.Fprintln(a.out, t.Faint.Render(fmt.Sprintf("%-20s ", s.ID))+t.SessionRow(s, w-21))
+				fmt.Fprintln(a.out, t.Faint.Render(fmt.Sprintf("%-20s ", s.ID))+t.SessionRow(s, w-21, repoW, search))
 			}
 			return nil
 		},

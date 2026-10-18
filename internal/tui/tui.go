@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -127,6 +128,12 @@ type sessionTickMsg struct {
 	gen int
 }
 
+type deletedMsg struct {
+	deleted []string
+	err     error // first failure, if any
+	failed  int
+}
+
 type toastMsg struct {
 	text string
 	bad  bool
@@ -173,6 +180,24 @@ func (m *model) approvePlan(id string) tea.Cmd {
 	c, ctx := m.client, m.ctx
 	return func() tea.Msg {
 		return approvedMsg{id, c.ApprovePlan(ctx, id)}
+	}
+}
+
+func (m *model) deleteSessions(ss []api.Session) tea.Cmd {
+	c, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		var msg deletedMsg
+		for _, s := range ss {
+			if err := c.DeleteSession(ctx, s.ID); err != nil {
+				msg.failed++
+				if msg.err == nil {
+					msg.err = err
+				}
+				continue
+			}
+			msg.deleted = append(msg.deleted, s.ID)
+		}
+		return msg
 	}
 }
 
@@ -263,6 +288,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.form != nil {
 				m.form.setSources(msg.sources)
 			}
+		}
+		return m, nil
+
+	case deletedMsg:
+		m.list.deleting = false
+		m.list.remove(msg.deleted)
+		m.list.clearSelection()
+		m.cache.PutSessions(m.list.all)
+		switch {
+		case msg.err != nil && len(msg.deleted) > 0:
+			m.flash(fmt.Sprintf("Deleted %d; %d failed: %s", len(msg.deleted), msg.failed, errText(msg.err)), true)
+		case msg.err != nil:
+			m.flash("Couldn't delete: "+errText(msg.err), true)
+		case len(msg.deleted) == 1:
+			m.flash("Deleted 1 session", false)
+		default:
+			m.flash(fmt.Sprintf("Deleted %d sessions", len(msg.deleted)), false)
 		}
 		return m, nil
 

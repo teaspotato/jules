@@ -65,3 +65,32 @@ func ids(ss []api.Session) []string {
 	}
 	return out
 }
+
+func TestSelectionTargets(t *testing.T) {
+	l := newList()
+	l.resize(80, 20)
+	now := time.Now()
+	l.setSessions([]api.Session{
+		{ID: "a", State: api.StateCompleted, UpdateTime: now},
+		{ID: "b", State: api.StateCompleted, UpdateTime: now.Add(-time.Minute)},
+		{ID: "c", State: api.StateCompleted, UpdateTime: now.Add(-2 * time.Minute)},
+		{ID: "d", State: api.StateCompleted, UpdateTime: now.Add(-3 * time.Minute)},
+	})
+	// Nothing selected: the current row.
+	if got := ids(l.targets()); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("targets = %v", got)
+	}
+	// Visual range a..c survives a refresh, plus a separate mark on d.
+	l.visual, l.anchor, l.anchorID = true, 0, "a"
+	l.move(2)
+	l.setSessions(l.all)
+	l.marked["d"] = true
+	if got := ids(l.targets()); len(got) != 4 {
+		t.Fatalf("targets = %v", got)
+	}
+	l.remove([]string{"a", "d"})
+	l.clearSelection()
+	if got := ids(l.visible); len(got) != 2 || got[0] != "b" {
+		t.Fatalf("after delete = %v", got)
+	}
+}

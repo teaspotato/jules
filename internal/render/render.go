@@ -29,6 +29,7 @@ type Theme struct {
 	Add, Del, Hunk, FileHdr          lipgloss.Style
 	OK, Bad, Warn                    lipgloss.Style
 	Card, Banner                     lipgloss.Style
+	Match                            lipgloss.Style
 
 	color bool
 	md    map[int]*glamour.TermRenderer
@@ -72,6 +73,7 @@ func NewTheme(w io.Writer) *Theme {
 	t.Warn = r.NewStyle().Foreground(amber).Bold(true)
 	t.Card = r.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(faint).Padding(0, 1)
 	t.Banner = r.NewStyle().Bold(true).Padding(0, 1)
+	t.Match = r.NewStyle().Bold(true).Foreground(c("#1F2328", "#0D1117")).Background(amber)
 	return t
 }
 
@@ -247,18 +249,73 @@ func (t *Theme) SessionHeader(s *api.Session, width int) string {
 	return b.String()
 }
 
-// SessionRow is one line in a session list.
-func (t *Theme) SessionRow(s api.Session, width int) string {
-	pr := " "
-	if len(s.PullRequests()) > 0 {
-		pr = t.OK.Render("⇡")
+// Session list columns: date, repo, name, status.
+const (
+	dateW   = 6
+	statusW = 14
+	colGap  = "  "
+)
+
+// RepoWidth sizes the repo column to fit ss, within sensible bounds.
+func RepoWidth(ss []api.Session) int {
+	w := 4
+	for _, s := range ss {
+		w = max(w, lipgloss.Width(s.Repo()))
 	}
-	repo := s.Repo()
-	right := fmt.Sprintf(" %s %6s", repo, Ago(s.UpdateTime))
-	titleW := width - 16 - 2 - lipgloss.Width(right)
-	title := truncate(s.DisplayTitle(), titleW)
-	pad := max(0, titleW-lipgloss.Width(title))
-	return fmt.Sprintf("%s %s %s%s%s", padRight(t.StateBadge(s.State), 14), pr, title, strings.Repeat(" ", pad), t.Faint.Render(right))
+	return min(w, 28)
+}
+
+// SessionColumns is the faint column header matching SessionRow.
+func (t *Theme) SessionColumns(width, repoW int) string {
+	nameW := max(4, width-dateW-repoW-statusW-3*len(colGap))
+	return t.Faint.Render(fmt.Sprintf("%*s%s%-*s%s%-*s%s%s",
+		dateW, "UPDATED", colGap, repoW, "REPO", colGap, nameW, "NAME", colGap, "STATUS"))
+}
+
+// SessionRow is one line in a session list: date, repo, name, status.
+// Text matching query (case-insensitive) is highlighted.
+func (t *Theme) SessionRow(s api.Session, width, repoW int, query string) string {
+	nameW := max(4, width-dateW-repoW-statusW-3*len(colGap))
+	date := fmt.Sprintf("%*s", dateW, Ago(s.UpdateTime))
+	repo := truncate(s.Repo(), repoW)
+	repoCell := t.Highlight(repo, query, t.Faint) + strings.Repeat(" ", max(0, repoW-lipgloss.Width(repo)))
+
+	pr := ""
+	if len(s.PullRequests()) > 0 {
+		pr = "⇡ "
+	}
+	name := truncate(s.DisplayTitle(), nameW-lipgloss.Width(pr))
+	nameCell := t.OK.Render(pr) + t.Highlight(name, query, lipgloss.Style{}) +
+		strings.Repeat(" ", max(0, nameW-lipgloss.Width(pr)-lipgloss.Width(name)))
+
+	return t.Faint.Render(date) + colGap + repoCell + colGap + nameCell + colGap + t.StateBadge(s.State)
+}
+
+// Highlight renders s with base, marking every case-insensitive match of
+// query with the Match style.
+func (t *Theme) Highlight(s, query string, base lipgloss.Style) string {
+	query = strings.TrimSpace(query)
+	lower := strings.ToLower(s)
+	if query == "" || len(lower) != len(s) {
+		return base.Render(s)
+	}
+	q := strings.ToLower(query)
+	var b strings.Builder
+	for {
+		i := strings.Index(lower, q)
+		if i < 0 {
+			b.WriteString(base.Render(s))
+			return b.String()
+		}
+		if i > 0 {
+			b.WriteString(base.Render(s[:i]))
+		}
+		b.WriteString(t.Match.Render(s[i : i+len(q)]))
+		s, lower = s[i+len(q):], lower[i+len(q):]
+		if s == "" {
+			return b.String()
+		}
+	}
 }
 
 func padRight(s string, w int) string {

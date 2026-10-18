@@ -64,6 +64,7 @@ var helpSections = []struct {
 	{"Sessions", [][2]string{
 		{"j/k ↑/↓", "move"}, {"g/G", "top / bottom"}, {"enter", "open"},
 		{"/", "search"}, {"tab", "cycle state filter"}, {"n", "new session"},
+		{"v", "range select"}, {"m / space", "mark"}, {"d", "delete selected (or current)"},
 		{"a", "approve plan"}, {"o", "open in browser"}, {"p", "open PR"},
 		{"r", "refresh"}, {"q", "quit"},
 	}},
