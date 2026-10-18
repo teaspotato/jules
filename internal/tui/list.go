@@ -15,17 +15,31 @@ import (
 	"github.com/teaspotato/jules/internal/render"
 )
 
-// stateFilters cycle with tab.
-var stateFilters = []struct {
-	name   string
-	states map[string]bool
-}{
-	{"all", nil},
-	{"needs attention", map[string]bool{api.StateAwaitingPlanApproval: true, api.StateAwaitingUserFeedback: true}},
-	{"active", map[string]bool{api.StateQueued: true, api.StatePlanning: true, api.StateInProgress: true, api.StatePaused: true,
-		api.StateAwaitingPlanApproval: true, api.StateAwaitingUserFeedback: true}},
-	{"completed", map[string]bool{api.StateCompleted: true}},
-	{"failed", map[string]bool{api.StateFailed: true}},
+// Tabs (cycled with tab / shift+tab). Archived sessions appear only in the
+// archived tab; the others split live sessions by state.
+const (
+	tabWorking = iota
+	tabBlocked
+	tabDone
+	tabArchived
+	numTabs
+)
+
+var tabNames = [numTabs]string{"working", "blocked", "done", "archived"}
+
+// tabOf places a session in exactly one tab.
+func tabOf(s api.Session) int {
+	if s.Archived {
+		return tabArchived
+	}
+	switch s.State {
+	case api.StateAwaitingPlanApproval, api.StateAwaitingUserFeedback, api.StatePaused, api.StateFailed:
+		return tabBlocked
+	case api.StateCompleted:
+		return tabDone
+	}
+	// QUEUED, PLANNING, IN_PROGRESS, and anything new or unspecified.
+	return tabWorking
 }
 
 type listModel struct {
@@ -46,7 +60,7 @@ type listModel struct {
 	anchor   int
 	anchorID string        // keeps the range anchored across refreshes
 	confirm  []api.Session // sessions awaiting delete confirmation
-	deleting bool
+	busy     bool          // an archive/delete batch is in flight
 
 	loading bool
 	stale   bool // showing cached data while the first fetch runs
@@ -59,7 +73,8 @@ func newList() listModel {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.Placeholder = "search title, prompt, repo or id"
-	return listModel{loading: true, search: ti, backoff: pollList, marked: map[string]bool{}}
+	// Open on what needs you.
+	return listModel{loading: true, search: ti, backoff: pollList, marked: map[string]bool{}, filter: tabBlocked}
 }
 
 func (l *listModel) resize(w, h int) {
@@ -102,6 +117,21 @@ func (l *listModel) targets() []api.Session {
 func (l *listModel) clearSelection() {
 	l.marked = map[string]bool{}
 	l.visual = false
+}
+
+// setArchived flips the archived flag locally after a successful call.
+func (l *listModel) setArchived(ids []string, archived bool) {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[id] = true
+	}
+	for i := range l.all {
+		if set[l.all[i].ID] {
+			l.all[i].Archived = archived
+			l.all[i].Raw = nil // Raw would re-emit the stale flag
+		}
+	}
+	l.apply()
 }
 
 // remove drops deleted sessions from the list.
@@ -160,11 +190,10 @@ func (l *listModel) upsert(s api.Session) {
 }
 
 func (l *listModel) apply() {
-	f := stateFilters[l.filter].states
 	q := strings.ToLower(strings.TrimSpace(l.search.Value()))
 	l.visible = l.visible[:0]
 	for _, s := range l.all {
-		if f != nil && !f[s.State] {
+		if tabOf(s) != l.filter {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(s.Title+"\n"+s.Prompt+"\n"+s.Repo()+"\n"+s.ID), q) {
@@ -228,8 +257,8 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		targets := l.confirm
 		l.confirm = nil
 		if key.String() == "y" || key.String() == "Y" {
-			l.deleting = true
-			return m.deleteSessions(targets)
+			l.busy = true
+			return m.batch(actDelete, targets)
 		}
 		m.flash("Delete cancelled", false)
 		return nil
@@ -294,11 +323,22 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 			}
 			l.move(1)
 		}
-	case "d", "delete":
-		if l.deleting {
+	case "d", "D", "delete", "u":
+		targets := l.targets()
+		if len(targets) == 0 || l.busy {
 			return nil
 		}
-		if targets := l.targets(); len(targets) > 0 {
+		// Archived tab: u unarchives, d deletes. Elsewhere: d archives,
+		// D deletes. Only delete asks for confirmation.
+		archived := l.filter == tabArchived
+		switch k := key.String(); {
+		case k == "u" && archived:
+			l.busy = true
+			return m.batch(actUnarchive, targets)
+		case k == "d" && !archived:
+			l.busy = true
+			return m.batch(actArchive, targets)
+		case k == "D" && !archived, k == "d" && archived, k == "delete":
 			l.confirm = targets
 		}
 	case "?":
@@ -321,11 +361,11 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		l.searching = true
 		return l.search.Focus()
 	case "tab":
-		l.filter = (l.filter + 1) % len(stateFilters)
+		l.filter = (l.filter + 1) % numTabs
 		l.cursor = 0
 		l.apply()
 	case "shift+tab":
-		l.filter = (l.filter + len(stateFilters) - 1) % len(stateFilters)
+		l.filter = (l.filter + numTabs - 1) % numTabs
 		l.cursor = 0
 		l.apply()
 	case "r":
@@ -384,11 +424,11 @@ func (m *model) listView() string {
 	// Header: brand, counts, refresh state.
 	attn := 0
 	for _, s := range l.all {
-		if api.NeedsAttention(s.State) {
+		if !s.Archived && api.NeedsAttention(s.State) {
 			attn++
 		}
 	}
-	left := m.st.brand.Render("◆ Jules") + t.Faint.Render(fmt.Sprintf("  %d sessions", len(l.all)))
+	left := m.st.brand.Render("◆ Jules")
 	if attn > 0 {
 		left += "  " + t.Warn.Render(fmt.Sprintf("%d need you", attn))
 	}
@@ -405,11 +445,16 @@ func (m *model) listView() string {
 
 	// Filter line.
 	var tabs []string
-	for i, f := range stateFilters {
+	var counts [numTabs]int
+	for _, s := range l.all {
+		counts[tabOf(s)]++
+	}
+	for i, name := range tabNames {
+		label := fmt.Sprintf("%s %d", name, counts[i])
 		if i == l.filter {
-			tabs = append(tabs, t.Accent.Bold(true).Render("["+f.name+"]"))
+			tabs = append(tabs, t.Accent.Bold(true).Render("["+label+"]"))
 		} else {
-			tabs = append(tabs, t.Faint.Render(f.name))
+			tabs = append(tabs, t.Faint.Render(" "+label+" "))
 		}
 	}
 	filterLine := " " + strings.Join(tabs, " ")
@@ -444,8 +489,10 @@ func (m *model) listView() string {
 		switch {
 		case l.loading:
 			msg = "Loading sessions…"
-		case l.search.Value() != "" || l.filter != 0:
-			msg = "No sessions match. Press esc to clear the search or tab to change the filter."
+		case l.search.Value() != "":
+			msg = "No sessions match. Press esc to clear the search or tab to switch tabs."
+		case len(l.all) > 0:
+			msg = "Nothing " + tabNames[l.filter] + ". Press tab to switch tabs."
 		case l.err != nil:
 			msg = "Couldn't load sessions: " + errText(l.err)
 		default:
@@ -456,9 +503,13 @@ func (m *model) listView() string {
 
 	columns := "  " + t.SessionColumns(rowW, repoW)
 
-	hints := "enter open · n new · / search · tab filter · v range · m mark · d delete · a approve · ? help · q quit"
+	actions := "d archive · D delete"
+	if l.filter == tabArchived {
+		actions = "u unarchive · d delete"
+	}
+	hints := "enter open · n new · / search · tab switch · v range · m mark · " + actions + " · ? help · q quit"
 	if sel := len(l.selection()); sel > 0 || l.visual {
-		hints = fmt.Sprintf("%d selected · v %s · m mark · d delete · esc clear", sel,
+		hints = fmt.Sprintf("%d selected · v %s · m mark · "+actions+" · esc clear", sel,
 			map[bool]string{true: "end range", false: "range"}[l.visual])
 	}
 	footer := m.footer(hints)

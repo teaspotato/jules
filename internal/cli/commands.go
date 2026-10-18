@@ -86,6 +86,8 @@ var stateAliases = map[string][]string{
 	"feedback":  {api.StateAwaitingUserFeedback},
 	"active":    {api.StateQueued, api.StatePlanning, api.StateInProgress, api.StateAwaitingPlanApproval, api.StateAwaitingUserFeedback, api.StatePaused},
 	"running":   {api.StateQueued, api.StatePlanning, api.StateInProgress},
+	"working":   {api.StateQueued, api.StatePlanning, api.StateInProgress},
+	"blocked":   {api.StateAwaitingPlanApproval, api.StateAwaitingUserFeedback, api.StatePaused, api.StateFailed},
 	"done":      {api.StateCompleted},
 	"completed": {api.StateCompleted},
 	"failed":    {api.StateFailed},
@@ -202,7 +204,7 @@ func newSessionsCmd(a *app) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVarP(&states, "state", "s", nil, "filter by state: awaiting, approval, input, active, running, completed, failed, or an API state name")
+	cmd.Flags().StringSliceVarP(&states, "state", "s", nil, "filter by state: working, blocked, done, awaiting, approval, input, active, failed, or an API state name")
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "filter by repository (owner/repo or repo)")
 	cmd.Flags().StringVarP(&search, "search", "q", "", "filter by text in title, prompt or id")
 	cmd.Flags().IntVarP(&limit, "limit", "n", 0, "show at most n sessions")

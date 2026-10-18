@@ -128,10 +128,18 @@ type sessionTickMsg struct {
 	gen int
 }
 
-type deletedMsg struct {
-	deleted []string
-	err     error // first failure, if any
-	failed  int
+// Batch actions on sessions from the list.
+const (
+	actArchive   = "archive"
+	actUnarchive = "unarchive"
+	actDelete    = "delete"
+)
+
+type batchMsg struct {
+	action string
+	done   []string
+	err    error // first failure, if any
+	failed int
 }
 
 type toastMsg struct {
@@ -144,7 +152,7 @@ type toastMsg struct {
 func (m *model) fetchSessions() tea.Cmd {
 	c, ctx := m.client, m.ctx
 	return func() tea.Msg {
-		ss, err := c.ListSessions(ctx, false)
+		ss, err := c.ListSessions(ctx, true) // archived ones fill their own tab
 		return sessionsMsg{ss, err}
 	}
 }
@@ -183,19 +191,24 @@ func (m *model) approvePlan(id string) tea.Cmd {
 	}
 }
 
-func (m *model) deleteSessions(ss []api.Session) tea.Cmd {
+func (m *model) batch(action string, ss []api.Session) tea.Cmd {
 	c, ctx := m.client, m.ctx
+	call := map[string]func(context.Context, string) error{
+		actArchive:   c.ArchiveSession,
+		actUnarchive: c.UnarchiveSession,
+		actDelete:    c.DeleteSession,
+	}[action]
 	return func() tea.Msg {
-		var msg deletedMsg
+		msg := batchMsg{action: action}
 		for _, s := range ss {
-			if err := c.DeleteSession(ctx, s.ID); err != nil {
+			if err := call(ctx, s.ID); err != nil {
 				msg.failed++
 				if msg.err == nil {
 					msg.err = err
 				}
 				continue
 			}
-			msg.deleted = append(msg.deleted, s.ID)
+			msg.done = append(msg.done, s.ID)
 		}
 		return msg
 	}
@@ -291,20 +304,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case deletedMsg:
-		m.list.deleting = false
-		m.list.remove(msg.deleted)
+	case batchMsg:
+		m.list.busy = false
+		if msg.action == actDelete {
+			m.list.remove(msg.done)
+		} else {
+			m.list.setArchived(msg.done, msg.action == actArchive)
+		}
 		m.list.clearSelection()
 		m.cache.PutSessions(m.list.all)
+		verb := map[string]string{actArchive: "Archived", actUnarchive: "Unarchived", actDelete: "Deleted"}[msg.action]
+		noun := "sessions"
+		if len(msg.done) == 1 {
+			noun = "session"
+		}
 		switch {
-		case msg.err != nil && len(msg.deleted) > 0:
-			m.flash(fmt.Sprintf("Deleted %d; %d failed: %s", len(msg.deleted), msg.failed, errText(msg.err)), true)
+		case msg.err != nil && len(msg.done) > 0:
+			m.flash(fmt.Sprintf("%s %d; %d failed: %s", verb, len(msg.done), msg.failed, errText(msg.err)), true)
 		case msg.err != nil:
-			m.flash("Couldn't delete: "+errText(msg.err), true)
-		case len(msg.deleted) == 1:
-			m.flash("Deleted 1 session", false)
+			m.flash("Couldn't "+msg.action+": "+errText(msg.err), true)
 		default:
-			m.flash(fmt.Sprintf("Deleted %d sessions", len(msg.deleted)), false)
+			m.flash(fmt.Sprintf("%s %d %s", verb, len(msg.done), noun), false)
 		}
 		return m, nil
 

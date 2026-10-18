@@ -18,15 +18,11 @@ func TestListSortsAttentionFirstAndFilters(t *testing.T) {
 		{ID: "2", Title: "needs me", State: api.StateAwaitingPlanApproval, UpdateTime: now.Add(-time.Hour)},
 		{ID: "3", Title: "failed thing", State: api.StateFailed, UpdateTime: now.Add(-time.Minute)},
 	})
-	if l.visible[0].ID != "2" || l.visible[1].ID != "1" {
-		t.Fatalf("order = %v", ids(l.visible))
+	// Opens on blocked: awaiting approval and failed, attention first.
+	if got := ids(l.visible); len(got) != 2 || got[0] != "2" || got[1] != "3" {
+		t.Fatalf("blocked = %v", got)
 	}
-	l.filter = 4 // failed
-	l.apply()
-	if len(l.visible) != 1 || l.visible[0].ID != "3" {
-		t.Fatalf("failed filter = %v", ids(l.visible))
-	}
-	l.filter = 0
+	l.filter = tabDone
 	l.search.SetValue("done")
 	l.apply()
 	if len(l.visible) != 1 || l.visible[0].ID != "1" {
@@ -69,6 +65,7 @@ func ids(ss []api.Session) []string {
 func TestSelectionTargets(t *testing.T) {
 	l := newList()
 	l.resize(80, 20)
+	l.filter = tabDone
 	now := time.Now()
 	l.setSessions([]api.Session{
 		{ID: "a", State: api.StateCompleted, UpdateTime: now},
@@ -92,5 +89,28 @@ func TestSelectionTargets(t *testing.T) {
 	l.clearSelection()
 	if got := ids(l.visible); len(got) != 2 || got[0] != "b" {
 		t.Fatalf("after delete = %v", got)
+	}
+}
+
+func TestTabsAndArchive(t *testing.T) {
+	l := newList()
+	l.setSessions([]api.Session{
+		{ID: "q", State: api.StateQueued},
+		{ID: "p", State: api.StatePaused},
+		{ID: "c", State: api.StateCompleted},
+		{ID: "x", State: api.StateFailed, Archived: true},
+		{ID: "n", State: "SOMETHING_NEW"},
+	})
+	want := map[string]int{"q": tabWorking, "n": tabWorking, "p": tabBlocked, "c": tabDone, "x": tabArchived}
+	for _, s := range l.all {
+		if got := tabOf(s); got != want[s.ID] {
+			t.Errorf("tabOf(%s) = %s", s.ID, tabNames[got])
+		}
+	}
+	l.setArchived([]string{"c"}, true)
+	l.filter = tabArchived
+	l.apply()
+	if got := ids(l.visible); len(got) != 2 {
+		t.Fatalf("archived = %v", got)
 	}
 }

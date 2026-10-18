@@ -8,8 +8,8 @@ messages, progress, diffs, command output) and **message existing sessions**. Ev
 TUI is also a subcommand, so it scripts cleanly.
 
 ```
-◆ Jules  373 sessions  74 need you
-[all] needs attention active completed failed
+◆ Jules  74 need you
+working 2  [blocked 74]  done 285   archived 0
   UPDATED  REPO      NAME                                 STATUS
 ▌    18m  acme/api  Investigate flaky integration test   needs input
       2d  acme/app  Scan recent commits for bugs         needs input
@@ -43,7 +43,7 @@ background. Press `?` for help.
 
 | View | Keys |
 |---|---|
-| Session list | `j/k` move, `enter` open, `/` search (matches highlighted), `tab` cycle state filter, `v` range select, `m` mark, `d` delete the selection (or the current session, after confirming), `n` new session, `a` approve plan, `o` open in browser, `p` open PR, `r` refresh, `q` quit |
+| Session list | `j/k` move, `enter` open, `/` search (matches highlighted), `tab` switch between **working** (queued, planning, in progress), **blocked** (needs approval or input, paused, failed), **done** and **archived**, `v` range select, `m` mark, `d` archive and `D` delete (confirmed) the selection or current session; in the archived tab `u` unarchives and `d` deletes, `n` new session, `a` approve plan, `o` open in browser, `p` open PR, `r` refresh, `q` quit |
 | Session | `j/k`, `ctrl+d/u`, `g/G` scroll, `i` or `m` write a message (`enter` sends, `alt+enter` newline), `a` approve plan, `d` full diffs, `e` expand prompt and output, `y` copy latest patch, `o`/`p` open session/PR, `esc` back |
 | New session | `tab` next field, `↑/↓` pick repo or branch, `space` toggle option, `ctrl+r` recall a recent prompt, `ctrl+s` start, `esc` cancel |
 
