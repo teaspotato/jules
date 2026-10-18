@@ -1,0 +1,78 @@
+{
+  "activities": [
+    {
+      "name": "sessions/42/activities/a1",
+      "createTime": "2026-10-16T08:42:13.365365Z",
+      "originator": "agent",
+      "planGenerated": {
+        "plan": {
+          "id": "plan1",
+          "steps": [
+            {"id": "s1", "title": "Fix the escape function", "description": "Use a regex-based escaper."},
+            {"id": "s2", "title": "Add a test", "index": 1}
+          ]
+        }
+      },
+      "id": "a1"
+    },
+    {
+      "name": "sessions/42/activities/a2",
+      "createTime": "2026-10-16T08:42:14.776891Z",
+      "originator": "user",
+      "planApproved": {"planId": "plan1"},
+      "id": "a2"
+    },
+    {
+      "name": "sessions/42/activities/a3",
+      "createTime": "2026-10-16T08:42:31.871020Z",
+      "originator": "agent",
+      "progressUpdated": {},
+      "artifacts": [
+        {"changeSet": {"source": "sources/github/acme/app", "gitPatch": {
+          "unidiffPatch": "diff --git a/app.js b/app.js\nindex 1..2 100644\n--- a/app.js\n+++ b/app.js\n@@ -1,3 +1,3 @@\n function escapeHtml(t) {\n-  return t\n+  return String(t).replace(/&/g, '&amp;')\n }\n",
+          "baseCommitId": "bceda51e5e53e61c7d001682626748dfd75fef5c"}}}
+      ],
+      "id": "a3"
+    },
+    {
+      "name": "sessions/42/activities/a4",
+      "createTime": "2026-10-16T08:42:33.690181Z",
+      "originator": "agent",
+      "progressUpdated": {"title": "Replaced the insecure escapeHtml implementation."},
+      "artifacts": [
+        {"changeSet": {"source": "sources/github/acme/app", "gitPatch": {
+          "unidiffPatch": "diff --git a/app.js b/app.js\nindex 1..2 100644\n--- a/app.js\n+++ b/app.js\n@@ -1,3 +1,3 @@\n function escapeHtml(t) {\n-  return t\n+  return String(t).replace(/&/g, '&amp;')\n }\n",
+          "baseCommitId": "bceda51e5e53e61c7d001682626748dfd75fef5c"}}},
+        {"media": {"data": "iVBORw0KGgo=", "mimeType": "image/png"}}
+      ],
+      "id": "a4"
+    },
+    {
+      "name": "sessions/42/activities/a5",
+      "createTime": "2026-10-16T08:44:00Z",
+      "originator": "agent",
+      "agentMessaged": {"agentMessage": "Done. Should I also **update the docs**?"},
+      "id": "a5"
+    },
+    {
+      "name": "sessions/42/activities/a6",
+      "createTime": "2026-10-16T08:45:00Z",
+      "originator": "system",
+      "somethingNew": {"field": 1},
+      "id": "a6"
+    },
+    {
+      "name": "sessions/42/activities/a7",
+      "createTime": "2026-10-16T08:47:09.873588Z",
+      "originator": "agent",
+      "sessionCompleted": {},
+      "artifacts": [
+        {"changeSet": {"source": "sources/github/acme/app", "gitPatch": {
+          "unidiffPatch": "diff --git a/app.js b/app.js\nindex 1..2 100644\n--- a/app.js\n+++ b/app.js\n@@ -1,3 +1,3 @@\n function escapeHtml(t) {\n-  return t\n+  return String(t).replace(/&/g, '&amp;')\n }\n",
+          "baseCommitId": "bceda51e5e53e61c7d001682626748dfd75fef5c",
+          "suggestedCommitMessage": "Fix XSS in escapeHtml"}}}
+      ],
+      "id": "a7"
+    }
+  ]
+}
