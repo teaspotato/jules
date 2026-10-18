@@ -43,7 +43,7 @@ background. Press `?` for help.
 
 | View | Keys |
 |---|---|
-| Session list | `j/k` move, `enter` open, `/` search (matches highlighted), `tab` switch between **working** (queued, planning, in progress), **blocked** (needs approval or input, paused, failed), **done** and **archived**, `v` range select, `m` mark, `d` archive and `D` delete (confirmed) the selection or current session; in the archived tab `u` unarchives and `d` deletes, `n` new session, `a` approve plan, `o` open in browser, `p` open PR, `r` refresh, `q` quit |
+| Session list | `j/k` move, `enter` open, `/` search (matches highlighted), `1`–`4` or `tab` switch between **working** (queued, planning, in progress), **blocked** (needs approval or input, paused, failed), **done** and **archived**, `v` range select, `m` mark, `d` archive and `D` delete (confirmed) the selection or current session; in the archived tab `u` unarchives and `d` deletes, `n` new session, `a` approve plan, `o` open in browser, `p` open PR, `r` refresh, `q` quit |
 | Session | `j/k`, `ctrl+d/u`, `g/G` scroll, `i` or `m` write a message (`enter` sends, `alt+enter` newline), `a` approve plan, `d` full diffs, `e` expand prompt and output, `y` copy latest patch, `o`/`p` open session/PR, `esc` back |
 | New session | `tab` next field, `↑/↓` pick repo or branch, `space` toggle option, `ctrl+r` recall a recent prompt, `ctrl+s` start, `esc` cancel |
 

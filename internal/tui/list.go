@@ -440,6 +440,10 @@ func (m *model) updateList(msg tea.Msg) tea.Cmd {
 		l.filter = (l.filter + numTabs - 1) % numTabs
 		l.cursor = 0
 		l.apply()
+	case "1", "2", "3", "4":
+		l.filter = int(key.String()[0] - '1')
+		l.cursor = 0
+		l.apply()
 	case "r":
 		l.loading = true
 		return m.fetchSessions()
@@ -586,7 +590,7 @@ func (m *model) listView() string {
 	if l.filter == tabArchived {
 		actions = "u unarchive · d delete"
 	}
-	hints := "enter open · n new · / search · tab switch · v range · m mark · " + actions + " · ? help · q quit"
+	hints := "enter open · n new · / search · 1-4/tab switch · v range · m mark · " + actions + " · ? help · q quit"
 	if sel := len(l.selection()); sel > 0 || l.visual {
 		hints = fmt.Sprintf("%d selected · v %s · m mark · "+actions+" · esc clear", sel,
 			map[bool]string{true: "end range", false: "range"}[l.visual])
