@@ -88,9 +88,11 @@ Findings from probing the live API that shaped the client:
 - The initial prompt is not an activity, so the timeline shows it as your first message.
 - `sendMessage` returns nothing; replies are matched by order (the first agent activity after
   your message). The echo of your message shows up within a few seconds.
-- Messaging a completed session doesn't resume it: the API accepts the message, Jules never
-  replies, and about a minute later the session turns FAILED (with no `sessionFailed` activity).
-  So `send` refuses finished sessions unless you pass `--force`, and the TUI disables the composer.
+- Messaging a recently completed session resumes it: the echo appears within seconds, the
+  session stays COMPLETED for about a minute, then goes back to IN_PROGRESS and Jules replies.
+  `send --wait` waits through that gap. A session finished months earlier turned FAILED instead.
+  Finished sessions keep polling slowly in the TUI, so replies (including ones sent from the web
+  app) show up without reopening them.
 - The discovery document (`api/discovery-v1alpha.json`) exposes archive, unarchive and delete,
   which aren't in the public reference; this client supports them.
 

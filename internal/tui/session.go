@@ -97,11 +97,15 @@ func (sm *sessionModel) interval() time.Duration {
 		return 3 * time.Second
 	case api.NeedsAttention(sm.s.State) || sm.s.State == api.StatePaused:
 		return pollWaiting
+	case api.IsTerminal(sm.s.State):
+		// Finished sessions can still be resumed (from here or the web),
+		// so keep checking, slowly.
+		return pollFinished
 	}
 	return pollActive
 }
 
-// poll schedules the next fetch; terminal sessions fetch once and stop.
+// poll schedules the next fetch (immediately when after is 0).
 func (sm *sessionModel) poll(m *model, after time.Duration) tea.Cmd {
 	sm.gen++
 	gen, id := sm.gen, sm.s.ID
@@ -212,9 +216,6 @@ func (m *model) updateSession(msg tea.Msg) tea.Cmd {
 			sm.resize(m, sm.width, sm.height)
 		}
 		sm.refresh(m, atBottom || first)
-		if api.IsTerminal(sm.s.State) && !sm.waiting {
-			return nil
-		}
 		return sm.poll(m, sm.interval())
 
 	case sessionTickMsg:
@@ -306,10 +307,6 @@ func (sm *sessionModel) updateKeys(m *model, k tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.showHelp = true
 	case "i", "m":
-		if api.IsTerminal(sm.s.State) {
-			m.flash("Jules doesn't resume finished sessions; press esc then n to start a new one", true)
-			return nil
-		}
 		sm.composing = true
 		return sm.composer.Focus()
 	case "a":
@@ -367,11 +364,7 @@ func (sm *sessionModel) view(m *model) string {
 	if sm.composing {
 		box = m.st.focus
 	}
-	inner := sm.composer.View()
-	if api.IsTerminal(sm.s.State) {
-		inner = fit(t.Faint.Render("This session has "+render.StateLabel(sm.s.State)+". Jules can't continue it; start a new session with n from the list."), sm.composer.Height())
-	}
-	composer := box.Width(m.width - 2).Render(inner)
+	composer := box.Width(m.width - 2).Render(sm.composer.View())
 
 	scroll := ""
 	if sm.vp.TotalLineCount() > sm.vp.Height {

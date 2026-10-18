@@ -40,6 +40,7 @@ const (
 const (
 	pollActive   = 4 * time.Second
 	pollWaiting  = 15 * time.Second
+	pollFinished = 30 * time.Second
 	pollList     = 30 * time.Second
 	pollMaxDelay = 2 * time.Minute
 )

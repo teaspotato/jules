@@ -433,7 +433,6 @@ func newNewCmd(a *app) *cobra.Command {
 func newSendCmd(a *app) *cobra.Command {
 	var (
 		wait    bool
-		force   bool
 		timeout time.Duration
 	)
 	cmd := &cobra.Command{
@@ -444,8 +443,9 @@ func newSendCmd(a *app) *cobra.Command {
 The API returns nothing for a sent message; with --wait, jules polls until the
 agent responds (any new agent activity after your message) and prints it.
 
-Messaging a completed or failed session is refused unless --force: the API
-accepts the message, but Jules doesn't reply and the session turns FAILED.`,
+Recently completed sessions can be messaged: Jules resumes them (the state goes
+back to IN_PROGRESS) and replies. Very old sessions may not resume; one finished
+months earlier turned FAILED without replying.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -459,10 +459,6 @@ accepts the message, but Jules doesn't reply and the session turns FAILED.`,
 			s, err := a.resolveSession(ctx, args[0])
 			if err != nil {
 				return err
-			}
-			if api.IsTerminal(s.State) && !force {
-				return withCode(ExitUsage, fmt.Errorf("session %s is %s; Jules doesn't resume finished sessions "+
-					"(a message marks it FAILED without a reply). Start a new session, or pass --force", s.ID, render.StateLabel(s.State)))
 			}
 			c, _ := a.api()
 			var tl *api.Timeline
@@ -486,7 +482,7 @@ accepts the message, but Jules doesn't reply and the session turns FAILED.`,
 				}
 				return nil
 			}
-			reply, err := waitForReply(ctx, c, tl, timeout)
+			reply, err := waitForReply(ctx, c, tl, s.State, timeout)
 			if err != nil {
 				if a.jsonOut {
 					for _, act := range reply {
@@ -514,7 +510,6 @@ accepts the message, but Jules doesn't reply and the session turns FAILED.`,
 		},
 	}
 	cmd.Flags().BoolVarP(&wait, "wait", "w", false, "wait for the agent's response and print it")
-	cmd.Flags().BoolVar(&force, "force", false, "send even if the session has completed or failed")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long")
 	return cmd
 }
@@ -523,11 +518,16 @@ accepts the message, but Jules doesn't reply and the session turns FAILED.`,
 // message, returning everything new (the echo of the user's message
 // included). Since sendMessage returns no ID, the reply is matched by
 // order: the first agent-originated activity after our userMessaged.
-func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, timeout time.Duration) ([]api.Activity, error) {
+//
+// startState is the session's state when the message was sent. A finished
+// session that is messaged stays COMPLETED for a minute or so before Jules
+// resumes it, so COMPLETED only ends the wait once the session has resumed.
+func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, startState string, timeout time.Duration) ([]api.Activity, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var got []api.Activity
 	sawEcho := false
+	resumed := !api.IsTerminal(startState)
 	delay := 2 * time.Second
 	for {
 		select {
@@ -573,11 +573,18 @@ func waitForReply(ctx context.Context, c *api.Client, tl *api.Timeline, timeout 
 		// A session can reach a terminal or paused state without emitting a
 		// reply activity, so watch its state too.
 		if s, err := c.GetSession(ctx, tl.SessionID); err == nil {
+			if !api.IsTerminal(s.State) {
+				resumed = true
+			}
 			switch s.State {
 			case api.StateFailed:
-				return got, withCode(ExitFailed, fmt.Errorf("session %s failed without replying", s.ID))
+				if resumed || startState != api.StateFailed {
+					return got, withCode(ExitFailed, fmt.Errorf("session %s failed without replying", s.ID))
+				}
 			case api.StateCompleted:
-				return got, nil
+				if resumed {
+					return got, nil
+				}
 			case api.StatePaused:
 				return got, fmt.Errorf("session %s is paused", s.ID)
 			}

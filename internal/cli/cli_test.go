@@ -119,19 +119,6 @@ func TestShowNDJSON(t *testing.T) {
 	}
 }
 
-func TestSendRefusesFinishedSession(t *testing.T) {
-	sent := false
-	_, err := run(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ":sendMessage") {
-			sent = true
-		}
-		w.Write([]byte(`{"id":"5","name":"sessions/5","state":"COMPLETED"}`))
-	}, "send", "5", "hello")
-	if err == nil || sent || !strings.Contains(err.Error(), "--force") {
-		t.Fatalf("err=%v sent=%v", err, sent)
-	}
-}
-
 func TestWaitForReplySkipsInFlightProgress(t *testing.T) {
 	polls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,11 +143,46 @@ func TestWaitForReplySkipsInFlightProgress(t *testing.T) {
 	c := api.New("k")
 	c.BaseURL = srv.URL
 	tl := api.NewTimeline("5", nil)
-	got, err := waitForReply(t.Context(), c, tl, 10*1e9)
+	got, err := waitForReply(t.Context(), c, tl, api.StateInProgress, 10*1e9)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if polls < 2 || len(got) != 3 || got[len(got)-1].ID != "a1" {
 		t.Fatalf("polls=%d got=%+v", polls, got)
+	}
+}
+
+func TestWaitForReplyWaitsForFinishedSessionToResume(t *testing.T) {
+	gets := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sessions/5":
+			gets++
+			// Still COMPLETED right after the message, then resumed.
+			if gets == 1 {
+				w.Write([]byte(`{"id":"5","state":"COMPLETED"}`))
+			} else {
+				w.Write([]byte(`{"id":"5","state":"IN_PROGRESS"}`))
+			}
+		case "/sessions/5/activities":
+			if gets < 2 {
+				w.Write([]byte(`{"activities":[{"id":"u1","originator":"user","userMessaged":{"userMessage":"hi"}}]}`))
+				return
+			}
+			w.Write([]byte(`{"activities":[
+				{"id":"u1","originator":"user","userMessaged":{"userMessage":"hi"}},
+				{"id":"a1","originator":"agent","agentMessaged":{"agentMessage":"hello"}}
+			]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := api.New("k")
+	c.BaseURL = srv.URL
+	got, err := waitForReply(t.Context(), c, api.NewTimeline("5", nil), api.StateCompleted, 30*1e9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1].ID != "a1" {
+		t.Fatalf("got %+v", got)
 	}
 }
